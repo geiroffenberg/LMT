@@ -8,6 +8,7 @@ import 'windows/chain_window.dart';
 import 'windows/phrase_window.dart';
 import 'windows/instrument_window.dart';
 import 'windows/mixer_window.dart';
+import 'windows/sampler_window.dart';
 
 class TrackerScreen extends StatefulWidget {
   const TrackerScreen({super.key});
@@ -19,6 +20,7 @@ class TrackerScreen extends StatefulWidget {
 class _TrackerScreenState extends State<TrackerScreen> {
   late TrackerModel model;
   final List<String> windowNames = ['S', 'C', 'P', 'I', 'M'];
+  int _samplerInstrumentOpen = -1;  // -1 = no sampler open, >=0 = instrument index
 
   @override
   void initState() {
@@ -376,7 +378,11 @@ class _TrackerScreenState extends State<TrackerScreen> {
   }
 
   Widget _buildBottomEditMenu() {
-    const line1Items = ['−', '+', '−10', '+10'];
+    // Determine menu items based on current cell
+    final isNoteColumn = model.currentWindow == 2 && model.cursorCol == 0;
+    final line1Items = isNoteColumn 
+      ? ['−', '+', '−12', '+12']
+      : ['−', '+', '−10', '+10'];
     const line2Items = ['CPY', 'CUT', 'PST', 'DEL', 'X'];
 
     return Positioned(
@@ -468,6 +474,39 @@ class _TrackerScreenState extends State<TrackerScreen> {
   }
 
   Widget _buildWindow() {
+    // Show sampler if open
+    if (_samplerInstrumentOpen >= 0 && _samplerInstrumentOpen < 99) {
+      return Stack(
+        children: [
+          SamplerWindow(
+            model: model,
+            instrumentIdx: _samplerInstrumentOpen,
+            onStateChange: () => setState(() {}),
+          ),
+          // Close button
+          Positioned(
+            top: 8,
+            right: 8,
+            child: GestureDetector(
+              onTap: () {
+                setState(() {
+                  _samplerInstrumentOpen = -1;
+                });
+              },
+              child: Container(
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  border: Border.all(color: kGreen, width: 1),
+                ),
+                child: Icon(Icons.close, color: kGreen, size: 20),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    // Show normal windows
     switch (model.currentWindow) {
       case 0:
         return SongWindow(model: model, onStateChange: () => setState(() {}));
@@ -476,7 +515,15 @@ class _TrackerScreenState extends State<TrackerScreen> {
       case 2:
         return PhraseWindow(model: model, onStateChange: () => setState(() {}));
       case 3:
-        return InstrumentWindow(model: model, onStateChange: () => setState(() {}));
+        return InstrumentWindow(
+          model: model,
+          onStateChange: () => setState(() {}),
+          onSamplerOpen: (idx) {
+            setState(() {
+              _samplerInstrumentOpen = idx;
+            });
+          },
+        );
       case 4:
         return MixerWindow(model: model, onStateChange: () => setState(() {}));
       default:

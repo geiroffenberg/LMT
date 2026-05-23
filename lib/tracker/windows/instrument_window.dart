@@ -1,104 +1,295 @@
 import 'package:flutter/material.dart';
 import '../tracker_model.dart';
 import '../tracker_styles.dart';
+import '../sample_browser.dart';
 
 const _rowNumW = 32.0;
-const _rowH    = 28.0;
-const _numCols = 8; // LD ED RC FT RS TR MD BS
-const _headers = ['LD', 'ED', 'RC', 'FT', 'RS', 'TR', 'MD', 'BS'];
+const _rowH    = 36.0;
 
-class InstrumentWindow extends StatelessWidget {
+class InstrumentWindow extends StatefulWidget {
   final TrackerModel model;
   final VoidCallback onStateChange;
+  final Function(int)? onSamplerOpen;
 
   const InstrumentWindow({
     required this.model,
     required this.onStateChange,
+    this.onSamplerOpen,
     super.key,
   });
+
+  @override
+  State<InstrumentWindow> createState() => _InstrumentWindowState();
+}
+
+class _InstrumentWindowState extends State<InstrumentWindow> {
+  String? _lastBrowserFolder;
+
+  TrackerModel get model => widget.model;
+  VoidCallback get onStateChange => widget.onStateChange;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDefaultSampleFolder();
+  }
+
+  Future<void> _loadDefaultSampleFolder() async {
+    await model.loadDefaultSampleFolder();
+  }
+
+  String _getParentFolder(String filePath) {
+    return filePath.replaceAll(RegExp(r'[^${Platform.pathSeparator}]*$'), '');
+  }
+
+  void _showSampleEditor(BuildContext context, int instrumentIndex) {
+    final currentSample = model.getSampleDisplayName(instrumentIndex);
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.black87,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Sample Editor - Instrument ${instrumentIndex + 1}',
+                style: trackerStyle(size: 14, color: kGreen),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.white, width: 1),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Current Sample:', style: trackerStyle(size: 12, color: Colors.white70)),
+                    Text(
+                      currentSample.isEmpty ? '(none)' : currentSample,
+                      style: trackerStyle(size: 12, color: kGreen),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  ElevatedButton(
+                    onPressed: () async {
+                      Navigator.pop(ctx);
+                      final samplePath = await SampleBrowser.show(
+                        context,
+                        defaultFolder: model.defaultSampleFolder,
+                        lastFolder: _lastBrowserFolder,
+                        onBookmarkFolder: (folderPath) async {
+                          await model.bookmarkSampleFolder(folderPath);
+                          setState(() {});
+                        },
+                        onRemoveBookmark: () async {
+                          await model.removeBookmark();
+                          setState(() {});
+                        },
+                      );
+                      if (samplePath != null) {
+                        _lastBrowserFolder = _getParentFolder(samplePath);
+                        model.loadSampleForInstrument(instrumentIndex, samplePath);
+                        setState(() {});
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.grey[800],
+                    ),
+                    child: Text('Load Sample', style: trackerStyle(size: 11)),
+                  ),
+                  ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.grey[800],
+                    ),
+                    child: Text('Close', style: trackerStyle(size: 11)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final cellW    = (constraints.maxWidth - _rowNumW) / _numCols;
-        final fontSize = (cellW * 0.55).clamp(12.0, 32.0);
-        final ts       = trackerStyle(size: fontSize);
-        final gs       = trackerStyle(size: fontSize, color: kGreen);
+        // Fixed button width
+        const btnW = 42.0;
+        const btnSpacing = 5.0;
+        final waveformW = constraints.maxWidth - _rowNumW - (btnW + btnSpacing) * 4;
+        
+        // Font sizing based on row height, matching other windows
+        final fontSize = (_rowH * 0.6).clamp(16.0, 28.0);
+        final ts = trackerStyle(size: fontSize);
+        final gs = trackerStyle(size: fontSize, color: kGreen);
 
-        return Stack(
+        return Column(
           children: [
-            Column(
-              children: [
-                SizedBox(
-                  height: _rowH,
-                  child: Row(children: [
-                    SizedBox(width: _rowNumW),
-                    ...List.generate(_numCols, (i) => SizedBox(
-                      width: cellW,
-                      child: Text(_headers[i], style: ts, textAlign: TextAlign.center),
-                    )),
-                  ]),
-                ),
-                Expanded(
-                  child: ListView.builder(
-                    padding: EdgeInsets.zero,
-                    itemCount: 99,
-                    itemExtent: _rowH,
-                    itemBuilder: (context, row) {
-                      final isRowCursor = model.cursorRow == row;
-                      final inst = model.instruments[row];
-                      // cols 0-2 are buttons (LD ED RC), cols 3-7 are editable
-                      final cells = [
-                        'LD', 'ED', 'RC',
-                        inst.filter.toString().padLeft(2, '0'),
-                        inst.resonance.toString().padLeft(2, '0'),
-                        inst.treble.toString().padLeft(2, '0'),
-                        inst.mid.toString().padLeft(2, '0'),
-                        inst.bass.toString().padLeft(2, '0'),
-                      ];
-                      return Row(children: [
-                        SizedBox(
-                          width: _rowNumW,
+            Expanded(
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                itemCount: 99,
+                itemExtent: _rowH,
+                itemBuilder: (context, row) {
+                  final isRowCursor = model.cursorRow == row;
+                  final inst = model.instruments[row];
+                  final samplePath = inst.sample;
+                  final hasSample = samplePath.isNotEmpty;
+
+                  return Row(
+                    children: [
+                      // Row number
+                      SizedBox(
+                        width: _rowNumW,
+                        child: Text(
+                          (row + 1).toString().padLeft(2, '0'),
+                          style: isRowCursor ? gs : ts,
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                      // LOAD button
+                      GestureDetector(
+                        onTap: () async {
+                          model.cursorRow = row;
+                          model.cursorCol = 0;
+                          onStateChange();
+                          final samplePath = await SampleBrowser.show(
+                            context,
+                            defaultFolder: model.defaultSampleFolder,
+                            lastFolder: _lastBrowserFolder,
+                            onBookmarkFolder: (folderPath) async {
+                              await model.bookmarkSampleFolder(folderPath);
+                              setState(() {});
+                            },
+                            onRemoveBookmark: () async {
+                              await model.removeBookmark();
+                              setState(() {});
+                            },
+                          );
+                          if (samplePath != null) {
+                            _lastBrowserFolder = _getParentFolder(samplePath);
+                            model.loadSampleForInstrument(row, samplePath);
+                            onStateChange();
+                          }
+                        },
+                        child: Container(
+                          width: btnW,
+                          margin: EdgeInsets.symmetric(horizontal: btnSpacing / 2),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.white, width: 1.5),
+                          ),
+                          alignment: Alignment.center,
                           child: Text(
-                            (row + 1).toString().padLeft(2, '0'),
-                            style: isRowCursor ? gs : ts,
+                            'LD',
+                            style: ts,
                             textAlign: TextAlign.center,
                           ),
                         ),
-                        ...List.generate(_numCols, (col) {
-                          final isCursor = isRowCursor && model.cursorCol == col;
-                          String text = cells[col];
-                          if (isCursor) {
-                            // Show actual value if non-zero, otherwise show 00
-                            int val = int.tryParse(cells[col].replaceAll('--', '0')) ?? 0;
-                            text = val == 0 ? '00' : val.toString().padLeft(2, '0');
+                      ),
+                      // EDIT button
+                      GestureDetector(
+                        onTap: () {
+                          // Only open sampler if a sample is loaded
+                          if (inst.sample.isNotEmpty) {
+                            widget.onSamplerOpen?.call(row);
                           }
-                          return GestureDetector(
-                            onTap: () {
-                              if (col < 3) return; // buttons not editable yet
-                              model.cursorRow = row;
-                              model.cursorCol = col;
-                              model.enterEditMode();
-                              model.editMenuVisible = true;
-                              onStateChange();
-                            },
-                            child: Container(
-                              width: cellW,
-                              height: _rowH,
-                              decoration: BoxDecoration(
-                                border: isCursor ? Border.all(color: kGreen, width: 2.0) : null,
-                              ),
-                              alignment: Alignment.center,
-                              child: Text(text, style: ts),
-                            ),
-                          );
-                        }),
-                      ]);
-                    },
-                  ),
-                ),
-              ],
+                        },
+                        child: Container(
+                          width: btnW,
+                          margin: EdgeInsets.symmetric(horizontal: btnSpacing / 2),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.white, width: 1.5),
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            'ED',
+                            style: inst.sample.isEmpty
+                                ? trackerStyle(size: fontSize, color: Colors.grey)
+                                : ts,
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                      // REC button
+                      GestureDetector(
+                        onTap: () {
+                          // TODO: Recording functionality
+                          model.cursorRow = row;
+                          model.cursorCol = 2;
+                          onStateChange();
+                        },
+                        child: Container(
+                          width: btnW,
+                          margin: EdgeInsets.symmetric(horizontal: btnSpacing / 2),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.white, width: 1.5),
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            'RC',
+                            style: ts,
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                      // Waveform display area
+                      Container(
+                        width: waveformW,
+                        margin: EdgeInsets.symmetric(horizontal: btnSpacing / 2),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.white, width: 1.5),
+                          color: const Color(0xFF0a0a0a),
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          hasSample ? model.getSampleDisplayName(row) : 'empty',
+                          style: hasSample
+                              ? trackerStyle(size: fontSize, color: kGreen)
+                              : trackerStyle(size: fontSize, color: Colors.grey),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                      // Delete button (X)
+                      GestureDetector(
+                        onTap: () {
+                          // Delete sample
+                          model.instruments[row].sample = '';
+                          onStateChange();
+                        },
+                        child: Container(
+                          width: btnW,
+                          margin: EdgeInsets.symmetric(horizontal: btnSpacing / 2),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.white, width: 1.5),
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            'X',
+                            style: ts,
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
             ),
           ],
         );

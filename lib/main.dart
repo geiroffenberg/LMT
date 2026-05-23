@@ -1,12 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'tracker/tracker_screen.dart';
+import 'tracker/audio/audio_engine.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
   ]);
+  
+  // Initialize native audio engine
+  await NativeAudioEngine.initialize();
+  
   runApp(const LMTApp());
 }
 
