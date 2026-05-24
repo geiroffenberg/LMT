@@ -23,8 +23,9 @@ class SongWindow extends StatelessWidget {
         final cellW = (constraints.maxWidth - _rowNumW) / _numCols;
         final fontSize = (cellW * 0.55).clamp(16.0, 32.0);
 
-        final textStyle   = trackerStyle(size: fontSize);
-        final greenStyle  = trackerStyle(size: fontSize, color: kGreen);
+        final textStyle     = trackerStyle(size: fontSize);
+        final greenStyle    = trackerStyle(size: fontSize, color: kGreen);
+        final playingStyle  = trackerStyle(size: fontSize, color: Colors.orange);
 
         return Stack(
           children: [
@@ -54,49 +55,68 @@ class SongWindow extends StatelessWidget {
                     itemCount: 99,
                     itemExtent: _rowH,
                     itemBuilder: (context, rowIndex) {
-                      final isRowCursor = model.cursorRow == rowIndex;
-                      return Row(
-                        children: [
-                          SizedBox(
-                            width: _rowNumW,
-                            child: Text(
-                              (rowIndex + 1).toString().padLeft(2, '0'),
-                              style: isRowCursor ? greenStyle : textStyle,
-                              textAlign: TextAlign.center,
-                            ),
-                          ),
-                          ...List.generate(_numCols, (colIndex) {
-                            final isCursor = isRowCursor && model.cursorCol == colIndex;
-                            final chainRef = model.song.chains[rowIndex][colIndex];
-                            String text = chainRef == 0
-                                ? '--'
-                                : chainRef.toString().padLeft(2, '0');
-                            if (isCursor) {
-                              text = chainRef == 0 ? '00' : chainRef.toString().padLeft(2, '0');
-                            }
-                            return GestureDetector(
+                      final isRowCursor  = model.cursorRow == rowIndex;
+                      final isPlaying    = model.isPlaying && model.playheadRow == rowIndex;
+                      final isSelected   = model.isRowInLineSelection(rowIndex);
+                      Color? rowColor = isPlaying  ? Colors.orange.withOpacity(0.12)
+                                      : isSelected ? Colors.cyan.withOpacity(0.15)
+                                      : null;
+                      final rowNumStyle  = isPlaying  ? playingStyle
+                                         : isSelected ? trackerStyle(size: fontSize, color: Colors.cyan)
+                                         : isRowCursor ? greenStyle
+                                         : textStyle;
+                      return Container(
+                        color: rowColor,
+                        child: Row(
+                          children: [
+                            GestureDetector(
                               onTap: () {
-                                model.cursorRow = rowIndex;
-                                model.cursorCol = colIndex;
-                                model.enterEditMode();
-                                model.editMenuVisible = true;
+                                model.selectLine(rowIndex);
                                 onStateChange();
                               },
-                              child: Container(
-                                width: cellW,
-                                height: _rowH,
-                                decoration: BoxDecoration(
-                                  border: isCursor ? Border.all(color: kGreen, width: 2.0) : null,
-                                ),
-                                alignment: Alignment.center,
+                              child: SizedBox(
+                                width: _rowNumW,
                                 child: Text(
-                                  text,
-                                  style: textStyle,
+                                  (rowIndex + 1).toString().padLeft(2, '0'),
+                                  style: rowNumStyle,
+                                  textAlign: TextAlign.center,
                                 ),
                               ),
-                            );
-                          }),
-                        ],
+                            ),
+                            ...List.generate(_numCols, (colIndex) {
+                              final isCursor = isRowCursor && model.cursorCol == colIndex;
+                              final chainRef = model.song.chains[rowIndex][colIndex];
+                              String text = chainRef == 0
+                                  ? '--'
+                                  : chainRef.toString().padLeft(2, '0');
+                              if (isCursor) {
+                                text = chainRef == 0 ? '00' : chainRef.toString().padLeft(2, '0');
+                              }
+                              return GestureDetector(
+                                onTap: () {
+                                  model.clearLineSelection();
+                                  model.cursorRow = rowIndex;
+                                  model.cursorCol = colIndex;
+                                  model.enterEditMode();
+                                  model.editMenuVisible = true;
+                                  onStateChange();
+                                },
+                                child: Container(
+                                  width: cellW,
+                                  height: _rowH,
+                                  decoration: BoxDecoration(
+                                    border: isCursor ? Border.all(color: kGreen, width: 2.0) : null,
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: Text(
+                                    text,
+                                    style: isPlaying ? playingStyle : textStyle,
+                                  ),
+                                ),
+                              );
+                            }),
+                          ],
+                        ),
                       );
                     },
                   ),

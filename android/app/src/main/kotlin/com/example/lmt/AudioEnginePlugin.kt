@@ -104,6 +104,21 @@ class AudioEnginePlugin(private val context: Context) {
                     nativeUpdateStretch(nativeHandle, instrumentIdx, enabled, beats, bpm, preservePitch)
                     result.success(true)
                 }
+                "enqueueAllRows" -> {
+                    val loop = call.argument<Boolean>("loop") ?: false
+                    val rowDataList = call.argument<List<Int>>("rowData") ?: emptyList()
+                    val rowDataArray = rowDataList.toIntArray()
+                    nativeEnqueueAllRows(nativeHandle, loop, rowDataArray)
+                    result.success(true)
+                }
+                "consumeRowAdvances" -> {
+                    val advances = nativeConsumeRowAdvances(nativeHandle)
+                    result.success(advances)
+                }
+                "clearQueue" -> {
+                    nativeClearQueue(nativeHandle)
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -127,4 +142,7 @@ class AudioEnginePlugin(private val context: Context) {
     private external fun nativeSetLevel(handle: Long, instrumentIdx: Int, level: Float)
     private external fun nativeSetPan(handle: Long, instrumentIdx: Int, pan: Float)
     private external fun nativeUpdateStretch(handle: Long, instrumentIdx: Int, enabled: Boolean, beats: Int, bpm: Float, preservePitch: Boolean)
+    private external fun nativeEnqueueAllRows(handle: Long, loop: Boolean, rowData: IntArray)
+    private external fun nativeConsumeRowAdvances(handle: Long): Int
+    private external fun nativeClearQueue(handle: Long)
 }

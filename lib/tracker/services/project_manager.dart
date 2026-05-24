@@ -1,0 +1,459 @@
+import 'dart:convert';
+import 'dart:io';
+import 'package:path/path.dart' as path_lib;
+import '../tracker_model.dart';
+import '../models/sampler_params.dart';
+import 'storage_service.dart';
+
+/// Project manager - handles project folder structure, save/load operations
+class ProjectManager {
+  static const String songFileName = 'song.lmt';
+  static const String samplesFolder = 'samples';
+
+  /// Get the latest project folder, or null if no projects exist
+  static Future<Directory?> getLatestProject() async {
+    try {
+      final projectsDir = await StorageService.getProjectsFolder();
+      if (projectsDir == null || !await projectsDir.exists()) {
+        print('Projects folder does not exist');
+        return null;
+      }
+
+      final entries = projectsDir.listSync();
+      final folders = entries
+          .whereType<Directory>()
+          .where((d) => !d.path.endsWith('.')) // Skip hidden folders
+          .toList();
+
+      if (folders.isEmpty) {
+        print('No project folders found');
+        return null;
+      }
+
+      // Sort by modification time, get the most recently modified
+      folders.sort(
+          (a, b) => b.statSync().modified.compareTo(a.statSync().modified));
+
+      return folders.first;
+    } catch (e) {
+      print('Error getting latest project: $e');
+      return null;
+    }
+  }
+
+  /// Create a new project folder with the given name
+  static Future<Directory?> createProject(String projectName) async {
+    try {
+      final projectsDir = await StorageService.getProjectsFolder();
+      if (projectsDir == null) {
+        print('ERROR: Could not get projects folder');
+        return null;
+      }
+
+      final projectDir = Directory('${projectsDir.path}/$projectName');
+      if (await projectDir.exists()) {
+        print('Project folder already exists: ${projectDir.path}');
+        return projectDir;
+      }
+
+      await projectDir.create(recursive: true);
+
+      // Create samples subfolder
+      final samplesDir = Directory('${projectDir.path}/$samplesFolder');
+      await samplesDir.create(recursive: true);
+
+      print('✓ Created project folder: ${projectDir.path}');
+      return projectDir;
+    } catch (e) {
+      print('ERROR creating project: $e');
+      return null;
+    }
+  }
+
+  /// Save a TrackerModel to a project folder
+  static Future<bool> saveProject(String projectName, TrackerModel model) async {
+    try {
+      print('=== Saving Project: $projectName ===');
+      
+      final projectDir = await createProject(projectName);
+      if (projectDir == null) {
+        print('ERROR: Failed to create project directory');
+        return false;
+      }
+
+      // Copy samples and update model paths to be project-relative
+      final samplesUsed = _getSamplesInUse(model);
+      final samplesDir = Directory('${projectDir.path}/$samplesFolder');
+      final Map<String, String> sampleMapping = {}; // old path -> new path
+
+      for (final samplePath in samplesUsed) {
+        if (samplePath.isNotEmpty && await File(samplePath).exists()) {
+          try {
+            final sampleName = path_lib.basename(samplePath);
+            final destPath = '${samplesDir.path}/$sampleName';
+            
+            // Copy file if it doesn't already exist
+            if (!await File(destPath).exists()) {
+              await File(samplePath).copy(destPath);
+              print('✓ Copied sample: $sampleName');
+            }
+            sampleMapping[samplePath] = destPath;
+          } catch (e) {
+            print('Warning: Could not copy sample: $e');
+          }
+        }
+      }
+
+      // Update model's instrument sample paths to point to project folder
+      for (final inst in model.instruments) {
+        if (inst.sample.isNotEmpty && sampleMapping.containsKey(inst.sample)) {
+          inst.sample = sampleMapping[inst.sample]!;
+        }
+      }
+
+      // Convert model to JSON (now with project-relative paths)
+      final songData = _modelToJson(model);
+      final jsonString = jsonEncode(songData);
+
+      // Write song file
+      final songFile = File('${projectDir.path}/$songFileName');
+      await songFile.writeAsString(jsonString);
+      print('✓ Saved song data to: ${songFile.path}');
+
+      // Update model's current project info
+      model.setCurrentProject(projectName, projectDir.path);
+
+      print('✓ Project saved successfully');
+      return true;
+    } catch (e) {
+      print('ERROR saving project: $e');
+      return false;
+    }
+  }
+
+  /// Load a project from a project folder
+  static Future<TrackerModel?> loadProject(Directory projectDir) async {
+    try {
+      print('=== Loading Project: ${projectDir.path} ===');
+      
+      final songFile = File('${projectDir.path}/$songFileName');
+      if (!await songFile.exists()) {
+        print('ERROR: song.lmt file not found in project');
+        return null;
+      }
+
+      final jsonString = await songFile.readAsString();
+      final jsonData = jsonDecode(jsonString) as Map<String, dynamic>;
+
+      final model = _jsonToModel(jsonData, projectDir);
+      print('✓ Project loaded successfully');
+      return model;
+    } catch (e) {
+      print('ERROR loading project: $e');
+      return null;
+    }
+  }
+
+  /// Get list of all project folders
+  static Future<List<Directory>> listProjects() async {
+    try {
+      final projectsDir = await StorageService.getProjectsFolder();
+      if (projectsDir == null || !await projectsDir.exists()) {
+        return [];
+      }
+
+      final entries = projectsDir.listSync();
+      return entries
+          .whereType<Directory>()
+          .where((d) => !d.path.endsWith('.'))
+          .toList();
+    } catch (e) {
+      print('Error listing projects: $e');
+      return [];
+    }
+  }
+
+  /// Get project name from directory path
+  static String getProjectName(Directory projectDir) {
+    return path_lib.basename(projectDir.path);
+  }
+
+  // ==================== Private Helpers ====================
+
+  /// Convert TrackerModel to JSON-serializable map
+  /// Stores just filenames for samples to make projects portable
+  static Map<String, dynamic> _modelToJson(TrackerModel model) {
+    return {
+      'version': 1,
+      'created': DateTime.now().toIso8601String(),
+      'bpm': model.song.bpm,
+      'chains': [
+        for (int i = 0; i < model.song.chains.length; i++)
+          List<int>.from(model.song.chains[i])
+      ],
+      'chainData': [
+        for (final chain in model.chains)
+          [
+            for (final item in chain.items)
+              {
+                'phrase': item.phrase,
+                'transpose': item.transpose,
+                'fx': [
+                  for (final fx in item.fx)
+                    {'name': fx.name, 'value': fx.value}
+                ],
+              }
+          ]
+      ],
+      'phrases': [
+        for (final phrase in model.phrases)
+          [
+            for (final step in phrase.steps)
+              {
+                'note': step.note,
+                'instrument': step.instrument,
+                'volume': step.volume,
+                'fx': [
+                  for (final fx in step.fx)
+                    {'name': fx.name, 'value': fx.value}
+                ],
+              }
+          ]
+      ],
+      'instruments': [
+        for (final inst in model.instruments)
+          {
+            'filter': inst.filter,
+            'resonance': inst.resonance,
+            'treble': inst.treble,
+            'mid': inst.mid,
+            'bass': inst.bass,
+            'sample': inst.sample.isNotEmpty ? path_lib.basename(inst.sample) : '',
+            'sampler': _samplerToJson(inst.sampler),
+          }
+      ],
+      'mixerChannels': [
+        for (final channel in model.mixerChannels)
+          {
+            'level': channel.level,
+            'reverbSend': channel.reverbSend,
+            'delaySend': channel.delaySend,
+            'chorusSend': channel.chorusSend,
+          }
+      ],
+    };
+  }
+
+  /// Convert JSON map back to TrackerModel
+  /// Resolves sample filenames to project folder paths
+  static TrackerModel _jsonToModel(Map<String, dynamic> json, [Directory? projectDir]) {
+    final model = TrackerModel();
+    final samplesDir = projectDir != null ? '${projectDir.path}/$samplesFolder' : '';
+
+    // Load BPM
+    model.song.bpm = json['bpm'] as int? ?? 120;
+
+    // Load chains (song grid — which chain each song row/track references)
+    if (json['chains'] is List) {
+      for (int i = 0; i < (json['chains'] as List).length && i < 99; i++) {
+        final chainData = (json['chains'] as List)[i] as List?;
+        if (chainData != null) {
+          for (int j = 0; j < chainData.length && j < 8; j++) {
+            model.song.chains[i][j] = (chainData[j] as int?) ?? 0;
+          }
+        }
+      }
+    }
+
+    // Load chain item data (phrase slots, transpose, fx)
+    if (json['chainData'] is List) {
+      final chainDataList = json['chainData'] as List;
+      for (int c = 0; c < chainDataList.length && c < 99; c++) {
+        final items = chainDataList[c] as List?;
+        if (items == null) continue;
+        for (int r = 0; r < items.length && r < 99; r++) {
+          final itemData = items[r] as Map<String, dynamic>?;
+          if (itemData == null) continue;
+          model.chains[c].items[r].phrase    = itemData['phrase']    as int? ?? 0;
+          model.chains[c].items[r].transpose = itemData['transpose'] as int? ?? 0;
+          if (itemData['fx'] is List) {
+            final fxList = itemData['fx'] as List;
+            for (int f = 0; f < fxList.length && f < 2; f++) {
+              final fxData = fxList[f] as Map<String, dynamic>?;
+              if (fxData != null) {
+                model.chains[c].items[r].fx[f].name  = fxData['name']  as String? ?? '---';
+                model.chains[c].items[r].fx[f].value = fxData['value'] as int?    ?? 0;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Load phrases
+    if (json['phrases'] is List) {
+      for (int p = 0; p < (json['phrases'] as List).length && p < 99; p++) {
+        final phraseData = (json['phrases'] as List)[p] as List?;
+        if (phraseData != null) {
+          for (int s = 0; s < phraseData.length && s < 99; s++) {
+            final stepData = phraseData[s] as Map<String, dynamic>?;
+            if (stepData != null) {
+              model.phrases[p].steps[s].note = stepData['note'] as int? ?? -1;
+              model.phrases[p].steps[s].instrument =
+                  stepData['instrument'] as int? ?? 0;
+              model.phrases[p].steps[s].volume = stepData['volume'] as int? ?? 80;
+
+              if (stepData['fx'] is List) {
+                for (int f = 0; f < (stepData['fx'] as List).length && f < 3; f++) {
+                  final fxData = (stepData['fx'] as List)[f] as Map<String, dynamic>?;
+                  if (fxData != null) {
+                    model.phrases[p].steps[s].fx[f].name =
+                        fxData['name'] as String? ?? '---';
+                    model.phrases[p].steps[s].fx[f].value =
+                        fxData['value'] as int? ?? 0;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Load instruments
+    if (json['instruments'] is List) {
+      for (int i = 0; i < (json['instruments'] as List).length && i < 99; i++) {
+        final instData = (json['instruments'] as List)[i] as Map<String, dynamic>?;
+        if (instData != null) {
+          model.instruments[i].filter = instData['filter'] as int? ?? 70;
+          model.instruments[i].resonance = instData['resonance'] as int? ?? 20;
+          model.instruments[i].treble = instData['treble'] as int? ?? 0;
+          model.instruments[i].mid = instData['mid'] as int? ?? 0;
+          model.instruments[i].bass = instData['bass'] as int? ?? 0;
+          
+          // Resolve sample filename to project folder path
+          final sampleFilename = instData['sample'] as String? ?? '';
+          if (sampleFilename.isNotEmpty && samplesDir.isNotEmpty) {
+            model.instruments[i].sample = '$samplesDir/$sampleFilename';
+          } else {
+            model.instruments[i].sample = sampleFilename;
+          }
+
+          if (instData['sampler'] is Map) {
+            model.instruments[i].sampler =
+                _jsonToSampler(instData['sampler'] as Map<String, dynamic>, samplesDir);
+          }
+        }
+      }
+    }
+
+    // Update project path in model
+    if (projectDir != null) {
+      model.currentProjectPath = projectDir.path;
+    }
+
+    // Load mixer channels
+    if (json['mixerChannels'] is List) {
+      for (int i = 0; i < (json['mixerChannels'] as List).length && i < 8; i++) {
+        final chData = (json['mixerChannels'] as List)[i] as Map<String, dynamic>?;
+        if (chData != null) {
+          model.mixerChannels[i].level = chData['level'] as int? ?? 80;
+          model.mixerChannels[i].reverbSend =
+              chData['reverbSend'] as int? ?? 0;
+          model.mixerChannels[i].delaySend =
+              chData['delaySend'] as int? ?? 0;
+          model.mixerChannels[i].chorusSend =
+              chData['chorusSend'] as int? ?? 0;
+        }
+      }
+    }
+
+    return model;
+  }
+
+  /// Convert SamplerParams to JSON
+  /// Stores just filenames for samples to make projects portable
+  static Map<String, dynamic> _samplerToJson(dynamic sampler) {
+    // This is a reference to SamplerParams
+    return {
+      'sampleName': sampler.sampleName,
+      'samplePath': sampler.samplePath != null && sampler.samplePath.isNotEmpty 
+        ? path_lib.basename(sampler.samplePath) 
+        : '',
+      'pitch': sampler.pitch,
+      'volume': sampler.volume,
+      'start': sampler.start,
+      'end': sampler.end,
+      'attack': sampler.attack,
+      'release': sampler.release,
+      'loopMode': sampler.loopMode,
+      'sliceStarts': List<int>.from(sampler.sliceStarts),
+      'stretchEnabled': sampler.stretchEnabled,
+      'stretchLines': sampler.stretchLines,
+      'stretchPreservePitch': sampler.stretchPreservePitch,
+      'modSend': sampler.modSend,
+      'delSend': sampler.delSend,
+      'revSend': sampler.revSend,
+      'lpCutoff': sampler.lpCutoff,
+      'hpCutoff': sampler.hpCutoff,
+    };
+  }
+
+  /// Convert JSON to SamplerParams
+  /// Resolves sample filename to project folder path
+  static SamplerParams _jsonToSampler(Map<String, dynamic> json, [String? samplesDir]) {
+    final sampler = SamplerParams.empty();
+    
+    sampler.sampleName = json['sampleName'] as String?;
+    
+    // Resolve samplePath filename to project folder if we have samplesDir
+    final samplePathStr = json['samplePath'] as String?;
+    if (samplePathStr != null && samplePathStr.isNotEmpty && samplesDir != null && samplesDir.isNotEmpty) {
+      final filename = path_lib.basename(samplePathStr);
+      sampler.samplePath = '$samplesDir/$filename';
+    } else {
+      sampler.samplePath = samplePathStr;
+    }
+    
+    sampler.pitch = (json['pitch'] as num?)?.toDouble() ?? 0.0;
+    sampler.volume = (json['volume'] as num?)?.toDouble() ?? 0.9;
+    sampler.start = (json['start'] as num?)?.toDouble() ?? 0.0;
+    sampler.end = (json['end'] as num?)?.toDouble() ?? 1.0;
+    sampler.attack = (json['attack'] as num?)?.toDouble() ?? 0.0;
+    sampler.release = (json['release'] as num?)?.toDouble() ?? 0.05;
+    sampler.loopMode = json['loopMode'] as int? ?? 0;
+    
+    if (json['sliceStarts'] is List) {
+      sampler.sliceStarts = List<int>.from(
+        (json['sliceStarts'] as List).map((x) => (x as num?)?.toInt() ?? 0),
+      );
+    }
+    
+    sampler.stretchEnabled = json['stretchEnabled'] as bool? ?? false;
+    sampler.stretchLines = json['stretchLines'] as int? ?? 16;
+    sampler.stretchPreservePitch = json['stretchPreservePitch'] as bool? ?? true;
+    sampler.modSend = (json['modSend'] as num?)?.toDouble() ?? 0.0;
+    sampler.delSend = (json['delSend'] as num?)?.toDouble() ?? 0.0;
+    sampler.revSend = (json['revSend'] as num?)?.toDouble() ?? 0.0;
+    sampler.lpCutoff = (json['lpCutoff'] as num?)?.toDouble() ?? 1.0;
+    sampler.hpCutoff = (json['hpCutoff'] as num?)?.toDouble() ?? 0.0;
+    
+    return sampler;
+  }
+
+  /// Get list of all samples in use across all instruments (including sampler samples)
+  static List<String> _getSamplesInUse(TrackerModel model) {
+    final samples = <String>{};
+    for (final instrument in model.instruments) {
+      if (instrument.sample.isNotEmpty) {
+        samples.add(instrument.sample);
+      }
+      // Also include samples from the sampler
+      if (instrument.sampler.samplePath != null && 
+          instrument.sampler.samplePath!.isNotEmpty) {
+        samples.add(instrument.sampler.samplePath!);
+      }
+    }
+    return samples.toList();
+  }
+}

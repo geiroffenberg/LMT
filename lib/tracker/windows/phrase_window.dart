@@ -33,7 +33,14 @@ class PhraseWindow extends StatelessWidget {
                 SizedBox(
                   height: _rowH,
                   child: Row(children: [
-                    SizedBox(width: _rowNumW),
+                    SizedBox(
+                      width: _rowNumW,
+                      child: Text(
+                        (model.activePhraseIdx + 1).toString().padLeft(2, '0'),
+                        style: gs,
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
                     ...List.generate(_numCols, (i) => SizedBox(
                       width: cellW,
                       child: Text(_headers[i], style: ts, textAlign: TextAlign.center),
@@ -47,15 +54,32 @@ class PhraseWindow extends StatelessWidget {
                     itemExtent: _rowH,
                     itemBuilder: (context, row) {
                       final isRowCursor = model.cursorRow == row;
-                      final step = model.phrases[row].steps[row];
+                      final isPlaying   = model.isPlaying && model.playheadRow == row;
+                      final isSelected  = model.isRowInLineSelection(row);
+                      final step = model.phrases[model.activePhraseIdx].steps[row];
+
+                      Color? rowColor = isPlaying  ? Colors.orange.withOpacity(0.12)
+                                      : isSelected ? Colors.cyan.withOpacity(0.15)
+                                      : null;
                       
-                      return Row(children: [
-                        SizedBox(
-                          width: _rowNumW,
-                          child: Text(
-                            (row + 1).toString().padLeft(2, '0'),
-                            style: isRowCursor ? gs : ts,
-                            textAlign: TextAlign.center,
+                      return Container(
+                        color: rowColor,
+                        child: Row(children: [
+                        GestureDetector(
+                          onTap: () {
+                            model.selectLine(row);
+                            onStateChange();
+                          },
+                          child: SizedBox(
+                            width: _rowNumW,
+                            child: Text(
+                              (row + 1).toString().padLeft(2, '0'),
+                              style: isPlaying  ? trackerStyle(size: fontSize, color: Colors.orange)
+                                   : isSelected ? trackerStyle(size: fontSize, color: Colors.cyan)
+                                   : isRowCursor ? gs
+                                   : ts,
+                              textAlign: TextAlign.center,
+                            ),
                           ),
                         ),
                         // NT column with - and + buttons
@@ -92,6 +116,7 @@ class PhraseWindow extends StatelessWidget {
                           
                           return GestureDetector(
                             onTap: () {
+                              model.clearLineSelection();
                               model.cursorRow = row;
                               model.cursorCol = col;
                               model.enterEditMode();
@@ -109,7 +134,7 @@ class PhraseWindow extends StatelessWidget {
                             ),
                           );
                         }),
-                      ]);
+                      ])); // closes Container + Row
                     },
                   ),
                 ),
@@ -167,6 +192,7 @@ class PhraseWindow extends StatelessWidget {
           child: GestureDetector(
             onTap: () {
               bool isDouble = model.isDoubleClick(row, 0, 2);
+              model.clearLineSelection();
               model.cursorRow = row;
               model.cursorCol = 0;
               if (isDouble && step.note < 0) {

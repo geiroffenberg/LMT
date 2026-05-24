@@ -176,4 +176,58 @@ class NativeAudioEngine {
       print('Error updateStretch: $e');
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Sequencer API — sample-accurate row-based playback
+  // ---------------------------------------------------------------------------
+
+  /// Pre-build and enqueue all song rows. Sends packed int array to native.
+  ///
+  /// [loop]: if true the song loops after the last row.
+  /// [rows]: each element is a map with:
+  ///   'lineSamples' (int) — audio frames this row lasts
+  ///   'noteData'    (List<int>) — packed as groups of 3:
+  ///                              [instrIdx, midiNote, volume_0_99]
+  ///                              midiNote -1 = hold, -2 = note off
+  static Future<void> enqueueAllRows(bool loop, List<Map<String, dynamic>> rows) async {
+    // Flatten into the wire format:
+    // [lineSamples, numNoteInts, ...noteInts, lineSamples, numNoteInts, ...noteInts, ...]
+    final flat = <int>[];
+    for (final row in rows) {
+      final ls = (row['lineSamples'] as int?) ?? 0;
+      final nd = (row['noteData'] as List?)?.cast<int>() ?? <int>[];
+      flat.add(ls);
+      flat.add(nd.length);
+      flat.addAll(nd);
+    }
+    try {
+      await platform.invokeMethod<void>(
+        'enqueueAllRows',
+        {'loop': loop, 'rowData': flat},
+      );
+    } catch (e) {
+      print('Error enqueueAllRows: $e');
+    }
+  }
+
+  /// Returns how many rows the audio engine has advanced since the last call.
+  /// Call this from a 16ms Dart timer for sample-accurate UI updates.
+  static Future<int> consumeRowAdvances() async {
+    try {
+      final result = await platform.invokeMethod<int>('consumeRowAdvances');
+      return result ?? 0;
+    } catch (e) {
+      print('Error consumeRowAdvances: $e');
+      return 0;
+    }
+  }
+
+  /// Stop sequencer and discard queued rows.
+  static Future<void> clearQueue() async {
+    try {
+      await platform.invokeMethod<void>('clearQueue');
+    } catch (e) {
+      print('Error clearQueue: $e');
+    }
+  }
 }

@@ -300,6 +300,94 @@ bool AudioEngine::isVoicePlaying(int instrumentIdx) const {
     return mVoices[instrumentIdx].isActive || mVoices[instrumentIdx].gain > 0.001f;
 }
 
+// ---------------------------------------------------------------------------
+// Sequencer
+// ---------------------------------------------------------------------------
+
+// Convert MIDI note number to frequency in Hz (A4 = MIDI 69 = 440 Hz)
+static float midiToHz(int note) {
+    return 440.0f * std::pow(2.0f, (note - 69) / 12.0f);
+}
+
+void AudioEngine::fireRow(const QueuedRow& row) {
+    // noteData packed as groups of 3: [instrumentIdx, midiNote, volume_0_99]
+    const int stride = 3;
+    for (int i = 0; i + stride <= static_cast<int>(row.noteData.size()); i += stride) {
+        const int instrIdx = row.noteData[i];
+        const int midiNote = row.noteData[i + 1];
+        const int vol      = row.noteData[i + 2];
+
+        if (instrIdx < 0 || instrIdx >= kMaxVoices) continue;
+
+        if (midiNote == -2) {
+            // Note off
+            Voice& v = mVoices[instrIdx];
+            v.isActive = false;
+            v.gainTarget = 0.0f;
+            v.isFadingOut = true;
+            v.samplesUntilStop = v.releaseSamples > 0 ? v.releaseSamples : (mSampleRate / 100);
+        } else if (midiNote >= 0) {
+            // Note on — only trigger if sample is loaded
+            if (!mSamples[instrIdx].isLoaded) continue;
+            const float freq  = midiToHz(midiNote);
+            const float level = vol >= 0 ? (vol / 99.0f) : 0.8f;
+
+            Voice& v = mVoices[instrIdx];
+            const int32_t numFrames = mSamples[instrIdx].numFrames;
+            v.instrumentIdx   = instrIdx;
+            v.isActive        = true;
+            v.samplePosition  = 0.0;
+            v.startFrame      = 0.0;
+            v.endFrame        = static_cast<double>(numFrames);
+            v.frequency       = freq;
+            v.level           = level;
+            v.gain            = 0.0f;
+            v.gainTarget      = 1.0f;
+            v.isFadingOut     = false;
+            v.elapsedSamples  = 0;
+            v.attackSamples   = 0;
+            v.envLevel        = 1.0f;
+            v.loopMode        = 0;
+            v.pingDir         = false;
+            // Short release to avoid clicks
+            const float releaseTime = 0.05f;
+            v.releaseSamples  = static_cast<int32_t>(releaseTime * mSampleRate);
+            v.releaseK        = 1.0f - std::exp(-1.0f / (mSampleRate * std::max(releaseTime, 1e-4f)));
+        }
+        // midiNote == -1 → hold/no change, skip
+    }
+}
+
+void AudioEngine::enqueueAllRows(bool loop, std::vector<QueuedRow> rows) {
+    std::lock_guard<std::mutex> lock(mVoiceMutex);
+    mQueue        = std::move(rows);
+    mQueueIndex   = 0;
+    mRowSampleCount = 0;
+    mSeqLoop      = loop;
+    mSeqRunning   = !mQueue.empty();
+    mPendingAdvances.store(0);
+
+    // Fire first row immediately
+    if (mSeqRunning) {
+        fireRow(mQueue[0]);
+    }
+    LOGD("Sequencer: enqueued %zu rows, loop=%d", mQueue.size(), loop ? 1 : 0);
+}
+
+void AudioEngine::clearQueue() {
+    std::lock_guard<std::mutex> lock(mVoiceMutex);
+    mSeqRunning = false;
+    mQueue.clear();
+    mQueueIndex = 0;
+    mRowSampleCount = 0;
+    mPendingAdvances.store(0);
+    LOGD("Sequencer: cleared");
+}
+
+int32_t AudioEngine::consumePendingRowAdvances() {
+    return mPendingAdvances.exchange(0);
+}
+
 oboe::DataCallbackResult AudioEngine::onAudioReady(
     oboe::AudioStream *audioStream,
     void *audioData,
@@ -311,6 +399,41 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
 
     // Clear output
     std::memset(outputData, 0, numFrames * 2 * sizeof(float));
+
+    // -------------------------------------------------------------------
+    // Sequencer: advance rows sample-accurately
+    // -------------------------------------------------------------------
+    if (mSeqRunning && !mQueue.empty()) {
+        int framesLeft = numFrames;
+        while (framesLeft > 0 && mSeqRunning) {
+            const QueuedRow& row = mQueue[mQueueIndex];
+            const int32_t rowDur = row.lineSamples > 0 ? row.lineSamples : mSampleRate; // fallback 1s
+
+            const int framesUntilNextRow = rowDur - mRowSampleCount;
+            const int consume = std::min(framesLeft, framesUntilNextRow);
+
+            mRowSampleCount += consume;
+            framesLeft      -= consume;
+
+            if (mRowSampleCount >= rowDur) {
+                // Row complete — advance to next
+                mRowSampleCount = 0;
+                mQueueIndex++;
+                mPendingAdvances.fetch_add(1, std::memory_order_relaxed);
+
+                if (mQueueIndex >= mQueue.size()) {
+                    if (mSeqLoop) {
+                        mQueueIndex = 0;
+                    } else {
+                        mSeqRunning = false;
+                        break;
+                    }
+                }
+                // Fire notes for the new row
+                fireRow(mQueue[mQueueIndex]);
+            }
+        }
+    }
 
     // Per-sample gain smoothing coefficient (~5ms time constant, same as tracker/tracker)
     const float smoothK = 1.0f - std::exp(-1.0f / (static_cast<float>(mSampleRate) * 0.005f));
@@ -671,6 +794,51 @@ Java_com_example_lmt_AudioEnginePlugin_nativeUpdateStretch(JNIEnv *env, jobject 
                                                             jint beats, jfloat bpm, jboolean preservePitch) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->updateStretch(instrumentIdx, enabled, beats, bpm, preservePitch);
+}
+
+// ---------------------------------------------------------------------------
+// Sequencer JNI
+// ---------------------------------------------------------------------------
+
+/// Enqueue all rows for playback.
+/// rowData is a flat int array with the following layout per row:
+///   [lineSamples, numNoteInts, noteInt0, noteInt1, ..., lineSamples, ...]
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeEnqueueAllRows(JNIEnv *env, jobject obj, jlong handle,
+                                                              jboolean loop, jintArray rowData) {
+    auto* engine = reinterpret_cast<AudioEngine*>(handle);
+
+    jsize len = env->GetArrayLength(rowData);
+    jint* data = env->GetIntArrayElements(rowData, nullptr);
+
+    std::vector<QueuedRow> rows;
+    int i = 0;
+    while (i < len) {
+        if (i + 2 > len) break; // need at least lineSamples + numNoteInts
+
+        QueuedRow row;
+        row.lineSamples = data[i++];
+        const int numInts = data[i++];
+        if (i + numInts > len) break; // malformed
+        row.noteData.assign(data + i, data + i + numInts);
+        i += numInts;
+        rows.push_back(std::move(row));
+    }
+
+    env->ReleaseIntArrayElements(rowData, data, JNI_ABORT);
+    engine->enqueueAllRows(loop, std::move(rows));
+}
+
+JNIEXPORT jint JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeConsumeRowAdvances(JNIEnv *env, jobject obj, jlong handle) {
+    auto* engine = reinterpret_cast<AudioEngine*>(handle);
+    return engine->consumePendingRowAdvances();
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeClearQueue(JNIEnv *env, jobject obj, jlong handle) {
+    auto* engine = reinterpret_cast<AudioEngine*>(handle);
+    engine->clearQueue();
 }
 
 } // extern "C"

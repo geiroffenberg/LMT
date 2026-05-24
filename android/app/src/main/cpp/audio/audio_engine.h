@@ -52,6 +52,21 @@ struct Voice {
     float filterBand = 0.0f;
 };
 
+// ---------------------------------------------------------------------------
+// Sequencer — sample-accurate row-based playback (ported from tracker/tracker)
+// ---------------------------------------------------------------------------
+
+/// One pre-built row ready for native playback.
+/// noteData: packed as groups of 3 ints per track:
+///   [instrumentIdx, midiNote, volume_0_99]
+///   instrumentIdx = -1  → silence/no change for that track
+///   midiNote      = -1  → no note (keep previous)
+///   midiNote      = -2  → note off
+struct QueuedRow {
+    int32_t lineSamples = 0;      // how many audio frames this row lasts
+    std::vector<int> noteData;    // track note events (groups of 3)
+};
+
 /// Main audio engine: Oboe stream manager + sample playback
 class AudioEngine : public oboe::AudioStreamDataCallback,
                     public oboe::AudioStreamErrorCallback {
@@ -89,7 +104,22 @@ public:
     bool isVoicePlaying(int instrumentIdx) const;
     int32_t getSampleRate() const { return mSampleRate; }
 
-    // AudioStreamDataCallback
+    // -----------------------------------------------------------------------
+    // Sequencer API — sample-accurate song playback
+    // -----------------------------------------------------------------------
+
+    /// Load all rows for playback in one call. Clears any existing queue.
+    /// [loop] = true: the queue replays from row 0 at the end.
+    void enqueueAllRows(bool loop, std::vector<QueuedRow> rows);
+
+    /// Stop sequencer and clear queue.
+    void clearQueue();
+
+    /// Consume row-advance ticks accumulated since the last call.
+    /// Returns the number of rows the playhead has advanced (for Dart UI update).
+    int32_t consumePendingRowAdvances();
+
+    /// AudioStreamDataCallback
     oboe::DataCallbackResult onAudioReady(
         oboe::AudioStream *audioStream,
         void *audioData,
@@ -107,6 +137,19 @@ private:
 
     int32_t mSampleRate = 48000;
     bool mRunning = false;
+
+    // -----------------------------------------------------------------------
+    // Sequencer state (protected by mVoiceMutex — same lock as voices)
+    // -----------------------------------------------------------------------
+    std::vector<QueuedRow> mQueue;
+    size_t                 mQueueIndex      = 0;   // current row in queue
+    int32_t                mRowSampleCount  = 0;   // samples elapsed in current row
+    bool                   mSeqRunning      = false;
+    bool                   mSeqLoop         = false;
+    std::atomic<int32_t>   mPendingAdvances {0};   // rows advanced since last poll
+
+    // Fire note events for a given row
+    void fireRow(const QueuedRow& row);
 
     // Audio processing helpers
     float processSample(Voice& voice, const SampleData& sample);
