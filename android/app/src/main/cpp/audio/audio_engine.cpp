@@ -523,9 +523,10 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
 float AudioEngine::processSample(Voice& voice, const SampleData& sample) {
     if (sample.numFrames == 0) return 0.0f;
 
-    // Sample rate conversion ratio, adjusted by frequency (pitch control)
-    // reference frequency is 440 Hz
-    double sampleStep = (double)sample.sampleRate / (double)mSampleRate * (double)voice.frequency / 440.0;
+    // Sample rate conversion ratio, adjusted by frequency (pitch control).
+    // Reference: C-4 (MIDI 60 = 261.626 Hz) plays the sample at original speed (1×).
+    static constexpr double kRootHz = 261.626; // C-4
+    double sampleStep = (double)sample.sampleRate / (double)mSampleRate * (double)voice.frequency / kRootHz;
     
     // For PING mode: reverse direction when needed
     if (voice.pingDir) {

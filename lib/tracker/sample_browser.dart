@@ -107,6 +107,7 @@ class SampleBrowser {
 
   static Future<String?> show(
     BuildContext context, {
+    int previewSlot = 0,
     String? defaultFolder,
     String? lastFolder,
     Future<void> Function(String folderPath)? onBookmarkFolder,
@@ -277,19 +278,19 @@ class SampleBrowser {
                                     onPressed: () async {
                                       if (previewingSample == samplePath) {
                                         // Stop playback
-                                        await NativeAudioEngine.noteOff(0);
+                                        await NativeAudioEngine.noteOff(previewSlot);
                                         setSheetState(() {
                                           previewingSample = null;
                                         });
                                       } else {
                                         // Stop any current preview first
                                         if (previewingSample != null) {
-                                          await NativeAudioEngine.noteOff(0);
+                                          await NativeAudioEngine.noteOff(previewSlot);
                                         }
                                         // Load and play
-                                        final loaded = await NativeAudioEngine.loadSample(0, samplePath);
+                                        final loaded = await NativeAudioEngine.loadSample(previewSlot, samplePath);
                                         if (loaded) {
-                                          await NativeAudioEngine.noteOn(0, 440.0, 0.8);
+                                          await NativeAudioEngine.noteOn(previewSlot, 261.626, 0.8);
                                           setSheetState(() {
                                             previewingSample = samplePath;
                                           });
@@ -307,7 +308,7 @@ class SampleBrowser {
                                     onPressed: () async {
                                       // Stop playback before selecting
                                       if (previewingSample != null) {
-                                        await NativeAudioEngine.noteOff(0);
+                                        await NativeAudioEngine.noteOff(previewSlot);
                                       }
                                       Navigator.of(ctx).pop(samplePath);
                                     },

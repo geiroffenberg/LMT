@@ -44,7 +44,7 @@ class PhraseStep {
     if (note == noteOff)  return 'OFF';
     if (note < 0 || note > 120) return '---';
     const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-    final octave = note ~/ 12;
+    final octave = (note ~/ 12) - 1; // MIDI 60 = C-4 (middle C)
     final semitone = note % 12;
     final noteName = noteNames[semitone];
     if (noteName.length == 1) {
@@ -93,6 +93,7 @@ class TrackerModel {
 
   // --- Song playback position ---
   int playheadRow = 0;        // which song row is currently playing
+  int playheadChainRow = 0;   // which chain slot (row) is currently playing
   int chainPhraseIndex = 0;   // which phrase-slot index we're on within the chains
   int phraseStep = 0;         // current step within the current phrase slot
   int masterStepLength = 0;   // max phrase length across all active tracks at current slot
@@ -893,10 +894,11 @@ class TrackerModel {
   //   - Chains: shorter chains loop via modulo within a song row
   //   - Phrases: shorter phrases loop via modulo within a chain slot
   // -----------------------------------------------------------------------
-  ({List<Map<String, dynamic>> rows, List<int> songRowMap})
+  ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap})
       buildPlaybackData({int startRow = 0}) {
-    final rows       = <Map<String, dynamic>>[];
-    final songRowMap = <int>[];  // parallel: rows[i] belongs to song row songRowMap[i]
+    final rows        = <Map<String, dynamic>>[];
+    final songRowMap  = <int>[];  // parallel: rows[i] belongs to song row songRowMap[i]
+    final chainRowMap = <int>[];  // parallel: rows[i] belongs to chain slot chainRowMap[i]
 
     final int lineSamples = (48000.0 * 60.0 / (song.bpm * 4)).round();
 
@@ -953,11 +955,12 @@ class TrackerModel {
           }
           rows.add({'lineSamples': lineSamples, 'noteData': noteData});
           songRowMap.add(songRow);
+          chainRowMap.add(slot);
         }
       }
     }
 
-    return (rows: rows, songRowMap: songRowMap);
+    return (rows: rows, songRowMap: songRowMap, chainRowMap: chainRowMap);
   }
 
   // -----------------------------------------------------------------------

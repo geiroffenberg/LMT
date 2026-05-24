@@ -57,6 +57,7 @@ class ChainWindow extends StatelessWidget {
                 itemBuilder: (context, row) {
                   final isRowCursor = model.cursorRow == row;
                   final isSelected  = model.isRowInLineSelection(row);
+                  final isPlaying   = model.isPlaying && model.playheadChainRow == row;
                   final item = model.chains[model.activeChainIdx].items[row];
 
                   String cellText(int col) {
@@ -84,7 +85,9 @@ class ChainWindow extends StatelessWidget {
                   }
 
                   return Container(
-                    color: isSelected ? Colors.cyan.withOpacity(0.15) : null,
+                    color: isPlaying  ? Colors.orange.withOpacity(0.25)
+                         : isSelected ? Colors.cyan.withOpacity(0.15)
+                         : null,
                     child: Row(children: [
                     // Row number — tap to select/extend line selection
                     GestureDetector(
@@ -97,6 +100,7 @@ class ChainWindow extends StatelessWidget {
                         child: Text(
                           (row + 1).toString().padLeft(2, '0'),
                           style: isSelected ? trackerStyle(size: fontSize, color: Colors.cyan)
+                               : isPlaying  ? trackerStyle(size: fontSize, color: Colors.orange)
                                : isRowCursor ? gs : ts,
                           textAlign: TextAlign.center,
                         ),

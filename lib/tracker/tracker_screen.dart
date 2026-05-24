@@ -30,8 +30,10 @@ class _TrackerScreenState extends State<TrackerScreen> {
 
   // Playback tracking
   List<int> _songRowMap    = [];  // C++ row index → song row number
+  List<int> _chainRowMap   = [];  // C++ row index → chain slot number
   int _currentStepIndex    = 0;   // current position in C++ queue
   bool _playingPhraseMode  = false; // true when playing from Phrase window
+  int _phraseLen           = 0;   // step count for phrase-mode loop wrap
 
   @override
   void initState() {
@@ -52,13 +54,16 @@ class _TrackerScreenState extends State<TrackerScreen> {
       if (advanced > 0) {
         setState(() {
           if (_playingPhraseMode) {
-            // Phrase window: playheadRow tracks the current step within the phrase
-            model.playheadRow = (model.playheadRow + advanced).clamp(0, 98);
+            // Phrase window: wrap playhead around phrase length so loop resets to row 0
+            if (_phraseLen > 0) {
+              model.playheadRow = (model.playheadRow + advanced) % _phraseLen;
+            }
           } else {
-            // Song window: map step index → actual song row
+            // Song window: map step index → actual song row and chain slot
             if (_songRowMap.isNotEmpty) {
               _currentStepIndex = (_currentStepIndex + advanced) % _songRowMap.length;
-              model.playheadRow = _songRowMap[_currentStepIndex];
+              model.playheadRow      = _songRowMap[_currentStepIndex];
+              model.playheadChainRow = _chainRowMap[_currentStepIndex];
             }
           }
         });
@@ -89,12 +94,16 @@ class _TrackerScreenState extends State<TrackerScreen> {
         // Phrase window: play just the active phrase
         rows = model.buildPhraseRows(model.activePhraseIdx);
         _songRowMap = [];
+        _chainRowMap = [];
+        _phraseLen = rows.length;
         model.playheadRow = 0;
       } else {
         // Song (or Chain) window: play from current song cursor row
         final data = model.buildPlaybackData(startRow: model.cursorRow);
         rows = data.rows;
-        _songRowMap = data.songRowMap;
+        _songRowMap  = data.songRowMap;
+        _chainRowMap = data.chainRowMap;
+        _phraseLen = 0;
         model.playheadRow = model.cursorRow;
       }
 
@@ -115,19 +124,31 @@ class _TrackerScreenState extends State<TrackerScreen> {
     model.clearLineSelection();
     final fromWindow = model.currentWindow;
 
-    // Validate navigation: can only go to Chain if current Song cell has a chain reference
-    if (windowIndex == 1 && fromWindow == 0) {
-      final chainRef = model.song.chains[model.cursorRow][model.cursorCol];
-      if (chainRef <= 0) return; // Can't navigate to Chain window without a valid chain
-      model.activeChainIdx = chainRef - 1;
-    } 
-    // Validate navigation: can only go to Phrase if current Chain row has a phrase reference
-    else if (windowIndex == 2 && fromWindow == 1) {
-      final item = model.chains[model.activeChainIdx].items[model.cursorRow];
-      if (item.phrase <= 0) return; // Can't navigate to Phrase window without a valid phrase
-      model.activePhraseIdx = item.phrase - 1;
+    // ── Forward navigation rules ─────────────────────────────────────────
+    // Chain window: only blocked when coming from Song with no chain selected.
+    if (windowIndex == 1) {
+      if (fromWindow == 0) {
+        final chainRef = model.song.chains[model.cursorRow][model.cursorCol];
+        if (chainRef <= 0) return;
+        model.activeChainIdx = chainRef - 1;
+      }
+      // From Phrase, INST, MIXER, or Chain itself: always allowed.
+    }
+    // Phrase window: only blocked when coming from Chain with no phrase selected.
+    else if (windowIndex == 2) {
+      if (fromWindow == 1) {
+        final item = model.chains[model.activeChainIdx].items[model.cursorRow];
+        if (item.phrase <= 0) return;
+        model.activePhraseIdx = item.phrase - 1;
+      }
+      // From Song directly: blocked unless we have a valid activeChainIdx already.
+      else if (fromWindow == 0) {
+        return; // must go Song → Chain first
+      }
+      // From INST, MIXER, or Phrase itself: always allowed.
     }
 
+    // ── Always allowed: Song, Instrument, Mixer ──────────────────────────
     model.currentWindow = windowIndex;
 
     if (windowIndex == 0) {

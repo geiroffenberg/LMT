@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../tracker_model.dart';
 import '../tracker_styles.dart';
 import '../sample_browser.dart';
+import '../audio/audio_engine.dart';
 
 const _rowNumW = 32.0;
 const _rowH    = 36.0;
@@ -83,6 +84,7 @@ class _InstrumentWindowState extends State<InstrumentWindow> {
                       Navigator.pop(ctx);
                       final samplePath = await SampleBrowser.show(
                         context,
+                        previewSlot: instrumentIndex,
                         defaultFolder: model.defaultSampleFolder,
                         lastFolder: _lastBrowserFolder,
                         onBookmarkFolder: (folderPath) async {
@@ -97,6 +99,7 @@ class _InstrumentWindowState extends State<InstrumentWindow> {
                       if (samplePath != null) {
                         _lastBrowserFolder = _getParentFolder(samplePath);
                         model.loadSampleForInstrument(instrumentIndex, samplePath);
+                        await NativeAudioEngine.loadSample(instrumentIndex, samplePath);
                         setState(() {});
                       }
                     },
@@ -169,6 +172,7 @@ class _InstrumentWindowState extends State<InstrumentWindow> {
                           onStateChange();
                           final samplePath = await SampleBrowser.show(
                             context,
+                            previewSlot: row,
                             defaultFolder: model.defaultSampleFolder,
                             lastFolder: _lastBrowserFolder,
                             onBookmarkFolder: (folderPath) async {
@@ -183,6 +187,7 @@ class _InstrumentWindowState extends State<InstrumentWindow> {
                           if (samplePath != null) {
                             _lastBrowserFolder = _getParentFolder(samplePath);
                             model.loadSampleForInstrument(row, samplePath);
+                            await NativeAudioEngine.loadSample(row, samplePath);
                             onStateChange();
                           }
                         },
