@@ -162,6 +162,33 @@ class AudioEnginePlugin(private val context: Context) {
                     nativeSetTrackSends(nativeHandle, trackIdx, rev, del, cho)
                     result.success(true)
                 }
+                "setInstrumentSends" -> {
+                    val instrIdx = call.argument<Int>("instrIdx") ?: 0
+                    val rev = call.argument<Double>("rev")?.toFloat() ?: 0f
+                    val del = call.argument<Double>("del")?.toFloat() ?: 0f
+                    val cho = call.argument<Double>("cho")?.toFloat() ?: 0f
+                    nativeSetInstrumentSends(nativeHandle, instrIdx, rev, del, cho)
+                    result.success(true)
+                }
+                "setInstrumentFilters" -> {
+                    val instrIdx = call.argument<Int>("instrIdx") ?: 0
+                    val hpNorm = call.argument<Double>("hpNorm")?.toFloat() ?: 0f
+                    val lpNorm = call.argument<Double>("lpNorm")?.toFloat() ?: 1f
+                    nativeSetInstrumentFilters(nativeHandle, instrIdx, hpNorm, lpNorm)
+                    result.success(true)
+                }
+                "setInstrumentPlaybackParams" -> {
+                    val instrIdx   = call.argument<Int>("instrIdx") ?: 0
+                    val pitch      = call.argument<Double>("pitch")?.toFloat() ?: 0f
+                    val volume     = call.argument<Double>("volume")?.toFloat() ?: 0.9f
+                    val startNorm  = call.argument<Double>("startNorm")?.toFloat() ?: 0f
+                    val endNorm    = call.argument<Double>("endNorm")?.toFloat() ?: 1f
+                    val attackSec  = call.argument<Double>("attackSec")?.toFloat() ?: 0f
+                    val releaseSec = call.argument<Double>("releaseSec")?.toFloat() ?: 0.05f
+                    val loopMode   = call.argument<Int>("loopMode") ?: 0
+                    nativeSetInstrumentPlaybackParams(nativeHandle, instrIdx, pitch, volume, startNorm, endNorm, attackSec, releaseSec, loopMode)
+                    result.success(true)
+                }
                 "setEqBand" -> {
                     val band   = call.argument<Int>("band") ?: 0
                     val dBgain = call.argument<Double>("dBgain")?.toFloat() ?: 0f
@@ -239,6 +266,9 @@ class AudioEnginePlugin(private val context: Context) {
     private external fun nativeSetChorusRate(handle: Long, norm: Float)
     private external fun nativeSetChorusDepth(handle: Long, norm: Float)
     private external fun nativeSetTrackSends(handle: Long, trackIdx: Int, rev: Float, del: Float, cho: Float)
+    private external fun nativeSetInstrumentSends(handle: Long, instrIdx: Int, rev: Float, del: Float, cho: Float)
+    private external fun nativeSetInstrumentFilters(handle: Long, instrIdx: Int, hpNorm: Float, lpNorm: Float)
+    private external fun nativeSetInstrumentPlaybackParams(handle: Long, instrIdx: Int, pitch: Float, volume: Float, startNorm: Float, endNorm: Float, attackSec: Float, releaseSec: Float, loopMode: Int)
     private external fun nativeSetEqBand(handle: Long, band: Int, dBgain: Float)
     private external fun nativeSetHpFreq(handle: Long, hz: Float)
     private external fun nativeSetHpRes(handle: Long, norm: Float)

@@ -1,0 +1,38 @@
+Pure Dart-side (no C++ needed — just row builder logic)
+
+CMD	What to do
+TPO	Transpose MIDI note values during buildPlaybackData
+LPB	Change lineSamples for that phrase's rows
+BPM	Same — change lineSamples at the chain level
+HOP	Skip/jump in the chain loop during row building
+CHA	Randomly skip note with Random().nextDouble() > value/99
+Row-time C++ (fireRow, simple flag/value per note)
+
+CMD	What to do
+VOL	Already partially there — just override v.level
+PAN	Override v.pan in fireRow
+SNR/SND/SNC	Override the send values per-note
+PIT	Multiply v.frequency by 2^((value-50)/99 * 2/12)
+DEL	Add a sampleOffset field to the note, skip it for that many samples in the buffer
+KIL	Schedule noteOff at value/99 * lineSamples samples into the row
+Per-voice modulation (new Voice state, per-sample loop)
+
+CMD	What to do
+REV	Set pingDir=true from start, step backward
+ARP	Cycle v.frequency between 3 pitches every N samples
+SLU/SLD	Interpolate v.frequency toward target over X lines
+VIB	Add LFO phase/speed to Voice, modulate frequency per sample
+TRE	Same LFO but modulate gain instead
+GAT	Square wave amplitude — simpler than tremolo
+RET	Most complex: re-trigger the note N times within the row
+Sampler automation (S01–S11) — per-note overrides of sampler params; needs new C++ atomic arrays (like filters) or passing values in the row.
+
+Mixer automation (M11–M86) — most complex; needs cross-voice channel effects timed to the row.
+
+Suggested order if you want to go through them:
+
+Build the FX pipeline first (add FX slots to QueuedRow, pass from builder)
+Dart-only ones — fast wins: TPO, LPB, BPM, CHA, HOP
+Row-time C++: VOL, PAN, PIT, SNR/SND/SNC, KIL, DEL
+Per-voice: REV, ARP, SLU/SLD, VIB, TRE, GAT
+S01–S11, M11–M86 last

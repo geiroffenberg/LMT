@@ -9,6 +9,14 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 
+// ---------------------------------------------------------------------------
+// FX command IDs — must match kFxId in lib/tracker/fx_commands.dart
+// ---------------------------------------------------------------------------
+static constexpr int FX_VOL = 1,  FX_PAN = 2,  FX_REV = 3,  FX_DEL = 4,  FX_RET = 5;
+static constexpr int FX_KIL = 6,  FX_ARP = 8,  FX_SLU = 9,  FX_SLD = 10, FX_VIB = 11;
+static constexpr int FX_PIT = 12, FX_TRE = 13, FX_GAT = 14, FX_SNR = 15;
+static constexpr int FX_SND = 16, FX_SNC = 17;
+
 // Global audio engine instance (for JNI access)
 static AudioEngine* gAudioEngine = nullptr;
 
@@ -55,6 +63,18 @@ bool AudioEngine::open() {
     // Initialize voices
     for (int i = 0; i < kMaxVoices; ++i) {
         mVoices[i].instrumentIdx = -1;
+        mInstrumentHpCutoff[i].store(0.0f, std::memory_order_relaxed);  // bypass (no HP cut)
+        mInstrumentLpCutoff[i].store(1.0f, std::memory_order_relaxed);  // fully open by default
+        mInstrumentRevSend[i].store(0.0f, std::memory_order_relaxed);
+        mInstrumentDelSend[i].store(0.0f, std::memory_order_relaxed);
+        mInstrumentChoSend[i].store(0.0f, std::memory_order_relaxed);
+        mInstrumentPitch[i].store(0.0f,  std::memory_order_relaxed);
+        mInstrumentVolume[i].store(0.9f,  std::memory_order_relaxed);
+        mInstrumentStartNorm[i].store(0.0f,  std::memory_order_relaxed);
+        mInstrumentEndNorm[i].store(1.0f,  std::memory_order_relaxed);
+        mInstrumentAttack[i].store(0.0f,  std::memory_order_relaxed);
+        mInstrumentRelease[i].store(0.05f, std::memory_order_relaxed);
+        mInstrumentLoopMode[i].store(0,    std::memory_order_relaxed);
     }
 
     return true;
@@ -152,6 +172,15 @@ void AudioEngine::noteOn(int instrumentIdx, float frequencyHz, float level) {
     voice.gain = 1.0f;
     voice.gainTarget = 1.0f;
     voice.isFadingOut = false;
+    // Per-instrument sends
+    voice.reverbSend = mInstrumentRevSend[instrumentIdx].load(std::memory_order_relaxed);
+    voice.delaySend  = mInstrumentDelSend[instrumentIdx].load(std::memory_order_relaxed);
+    voice.chorusSend = mInstrumentChoSend[instrumentIdx].load(std::memory_order_relaxed);
+    // Per-instrument filters (reset biquad state on new note)
+    voice.hpCutoff = mInstrumentHpCutoff[instrumentIdx].load(std::memory_order_relaxed);
+    voice.lpCutoff = mInstrumentLpCutoff[instrumentIdx].load(std::memory_order_relaxed);
+    voice.hpS1 = 0.0f; voice.hpS2 = 0.0f;
+    voice.lpS1 = 0.0f; voice.lpS2 = 0.0f;
 }
 
 void AudioEngine::noteOnRegion(int instrumentIdx, float frequencyHz, float level, float startNorm, float endNorm, float attackTime, float releaseTime, int loopMode) {
@@ -295,15 +324,13 @@ void AudioEngine::setPan(int instrumentIdx, float pan) {
 }
 
 void AudioEngine::setFilterCutoff(int instrumentIdx, float norm) {
-    if (instrumentIdx < 0 || instrumentIdx >= kMaxVoices) return;
-    std::lock_guard<std::mutex> lock(mVoiceMutex);
-    mVoices[instrumentIdx].cutoffNorm = norm;
+    // Repurposed as LP cutoff (0..1); use setInstrumentFilters for full control
+    setInstrumentFilters(instrumentIdx, mInstrumentHpCutoff[instrumentIdx].load(std::memory_order_relaxed), norm);
 }
 
 void AudioEngine::setFilterResonance(int instrumentIdx, float norm) {
-    if (instrumentIdx < 0 || instrumentIdx >= kMaxVoices) return;
-    std::lock_guard<std::mutex> lock(mVoiceMutex);
-    mVoices[instrumentIdx].resonanceNorm = norm;
+    // No-op: resonance is fixed at Butterworth Q; kept for API compatibility
+    (void)instrumentIdx; (void)norm;
 }
 
 bool AudioEngine::isVoicePlaying(int instrumentIdx) const {
@@ -320,58 +347,262 @@ static float midiToHz(int note) {
     return 440.0f * std::pow(2.0f, (note - 69) / 12.0f);
 }
 
+// ---------------------------------------------------------------------------
+// triggerNote — arms a voice with all FX applied.  Called from fireRow (immediate
+// notes) and from onAudioReady (DEL-delayed notes).  Must be called under mVoiceMutex.
+// ---------------------------------------------------------------------------
+void AudioEngine::triggerNote(int instrIdx, int midiNote, int vol, int trackIdx,
+                               int32_t lineSamples,
+                               int fx0cmd, int fx0val,
+                               int fx1cmd, int fx1val,
+                               int fx2cmd, int fx2val) {
+    if (instrIdx < 0 || instrIdx >= kMaxVoices) return;
+    if (!mSamples[instrIdx].isLoaded) return;
+
+    const int fxCmds[3] = {fx0cmd, fx1cmd, fx2cmd};
+    const int fxVals[3] = {fx0val, fx1val, fx2val};
+
+    // Read per-instrument playback params
+    const float pitchOctave = mInstrumentPitch[instrIdx].load(std::memory_order_relaxed);
+    const float baseVol     = mInstrumentVolume[instrIdx].load(std::memory_order_relaxed);
+    const float startNorm   = mInstrumentStartNorm[instrIdx].load(std::memory_order_relaxed);
+    const float endNorm     = mInstrumentEndNorm[instrIdx].load(std::memory_order_relaxed);
+    const float attackSec   = mInstrumentAttack[instrIdx].load(std::memory_order_relaxed);
+    const float releaseSec  = mInstrumentRelease[instrIdx].load(std::memory_order_relaxed);
+    const int   loopMode    = mInstrumentLoopMode[instrIdx].load(std::memory_order_relaxed);
+
+    // VOL FX overrides the step volume column; scan for it first
+    float effVol = (vol >= 0) ? (vol / 99.0f) : 1.0f;
+    for (int f = 0; f < 3; f++) {
+        if (fxCmds[f] == FX_VOL) { effVol = fxVals[f] / 99.0f; break; }
+    }
+
+    const float freq  = midiToHz(midiNote) * std::pow(2.0f, pitchOctave);
+    const float level = effVol * baseVol;
+
+    Voice& v = mVoices[instrIdx];
+    const int32_t numFrames = mSamples[instrIdx].numFrames;
+    const float sf = startNorm * static_cast<float>(numFrames);
+    const float ef = endNorm   * static_cast<float>(numFrames);
+
+    // --- Arm voice ---
+    v.instrumentIdx    = instrIdx;
+    v.isActive         = true;
+    v.startFrame       = static_cast<double>(sf);
+    v.endFrame         = static_cast<double>(ef > sf ? ef : static_cast<float>(numFrames));
+    v.samplePosition   = static_cast<double>(sf);
+    v.frequency        = freq;
+    v.level            = level;
+    v.gain             = 0.0f;
+    v.gainTarget       = 1.0f;
+    v.isFadingOut      = false;
+    v.elapsedSamples   = 0;
+    v.attackSamples    = static_cast<int32_t>(attackSec * mSampleRate);
+    v.envLevel         = (v.attackSamples > 0) ? 0.0f : 1.0f;
+    v.loopMode         = loopMode;
+    v.pingDir          = false;
+    v.reverbSend       = std::min(1.0f, mTrackReverbSend[trackIdx] + mInstrumentRevSend[instrIdx].load(std::memory_order_relaxed));
+    v.delaySend        = std::min(1.0f, mTrackDelaySend[trackIdx]  + mInstrumentDelSend[instrIdx].load(std::memory_order_relaxed));
+    v.chorusSend       = std::min(1.0f, mTrackChorusSend[trackIdx] + mInstrumentChoSend[instrIdx].load(std::memory_order_relaxed));
+    v.trackIdx         = trackIdx;
+    v.hpCutoff         = mInstrumentHpCutoff[instrIdx].load(std::memory_order_relaxed);
+    v.lpCutoff         = mInstrumentLpCutoff[instrIdx].load(std::memory_order_relaxed);
+    v.hpS1 = v.hpS2 = v.lpS1 = v.lpS2 = 0.0f;
+    const float rt     = std::max(releaseSec, 0.001f);
+    v.releaseSamples   = static_cast<int32_t>(rt * mSampleRate);
+    v.releaseK         = 1.0f - std::exp(-1.0f / (mSampleRate * rt));
+
+    // --- Reset all FX modulation state ---
+    v.kilCountdown    = -1;
+    v.arpBaseFreq     = freq;
+    v.arpStep         = 0;  v.arpStepSamples = 0;  v.arpPhase = 0;
+    v.arpInterval1    = 0;  v.arpInterval2   = 0;
+    v.slideTargetHz   = 0.0f;  v.slideRateHz = 0.0f;
+    v.vibPhase        = 0.0f;  v.vibRateRad  = 0.0f;  v.vibDepthCents = 0.0f;
+    v.trePhase        = 0.0f;  v.treRateRad  = 0.0f;  v.treDepth = 0.0f;
+    v.gatPhase        = 0.0f;  v.gatRateRad  = 0.0f;  v.gatDepth = 0.0f;
+    v.retCount        = 0;     v.retPeriodSamples = 0; v.retPhase = 0;
+    v.retVolCurve     = 0;
+
+    // --- Apply FX slots ---
+    const float kTwoPi = 6.2831853f;
+    for (int f = 0; f < 3; f++) {
+        const int cmd = fxCmds[f];
+        const int val = fxVals[f];
+        switch (cmd) {
+            case FX_VOL: /* already applied above */ break;
+
+            case FX_PAN:
+                v.pan = val / 99.0f;
+                break;
+
+            case FX_REV:
+                // Play sample backwards: use pingDir mechanism, start at end
+                v.pingDir        = true;
+                v.samplePosition = v.endFrame > 1.0 ? v.endFrame - 1.0 : v.endFrame;
+                break;
+
+            case FX_KIL:
+                // Cut note after val% of the row duration
+                v.kilCountdown = static_cast<int32_t>((val / 99.0f) * lineSamples);
+                if (v.kilCountdown < 1) v.kilCountdown = 1;
+                break;
+
+            case FX_PIT: {
+                // Fine pitch: 00=-1 semitone, 50=0, 99=+1 semitone
+                const float cents = (val - 50) * 2.0f;   // -100..+100 cents
+                v.frequency  *= std::pow(2.0f, cents / 1200.0f);
+                v.arpBaseFreq = v.frequency;
+                break;
+            }
+
+            case FX_SNR: v.reverbSend = val / 99.0f; break;
+            case FX_SND: v.delaySend  = val / 99.0f; break;
+            case FX_SNC: v.chorusSend = val / 99.0f; break;
+
+            case FX_ARP: {
+                // XY: X=1st interval (0-9 semitones), Y=2nd interval (0-9 semitones)
+                v.arpInterval1   = val / 10;
+                v.arpInterval2   = val % 10;
+                v.arpBaseFreq    = v.frequency;
+                v.arpStepSamples = std::max(1, lineSamples / 3);
+                v.arpStep = 0;  v.arpPhase = 0;
+                break;
+            }
+
+            case FX_SLU: {
+                // XY: X=lines (1-9), Y=semitones (1-9) — slide UP
+                const int lines = std::max(1, val / 10);
+                const int semis = val % 10;
+                v.slideTargetHz = v.frequency * std::pow(2.0f, semis / 12.0f);
+                v.slideRateHz   = (v.slideTargetHz - v.frequency) / static_cast<float>(lines * lineSamples);
+                break;
+            }
+
+            case FX_SLD: {
+                // XY: X=lines, Y=semitones — slide DOWN
+                const int lines = std::max(1, val / 10);
+                const int semis = val % 10;
+                v.slideTargetHz = v.frequency * std::pow(2.0f, -semis / 12.0f);
+                v.slideRateHz   = (v.slideTargetHz - v.frequency) / static_cast<float>(lines * lineSamples);
+                break;
+            }
+
+            case FX_VIB: {
+                // XY: X=speed (0-9 → 0.5-8 Hz), Y=depth (0-9 → 0-100 cents)
+                const float lfoHz = 0.5f + (val / 10) * 0.833f;
+                v.vibRateRad    = kTwoPi * lfoHz / static_cast<float>(mSampleRate);
+                v.vibDepthCents = (val % 10) * 11.1f;
+                v.vibPhase      = 0.0f;
+                break;
+            }
+
+            case FX_TRE: {
+                // XY: X=speed, Y=depth (0-9 → 0-100% amplitude)
+                const float lfoHz = 0.5f + (val / 10) * 0.833f;
+                v.treRateRad = kTwoPi * lfoHz / static_cast<float>(mSampleRate);
+                v.treDepth   = (val % 10) / 9.0f;
+                v.trePhase   = 0.0f;
+                break;
+            }
+
+            case FX_GAT: {
+                // XY: X=speed, Y=gate depth
+                const float lfoHz = 0.5f + (val / 10) * 0.833f;
+                v.gatRateRad = kTwoPi * lfoHz / static_cast<float>(mSampleRate);
+                v.gatDepth   = (val % 10) / 9.0f;
+                v.gatPhase   = 0.0f;
+                break;
+            }
+
+            case FX_RET: {
+                // XY: X=vol curve (0-9), Y=retrig count (1-9)
+                const int curve = val / 10;
+                const int count = val % 10;
+                if (count > 0) {
+                    v.retCount         = count;
+                    v.retPeriodSamples = std::max(1, lineSamples / (count + 1));
+                    v.retPhase         = 0;
+                    v.retVolCurve      = curve;
+                }
+                break;
+            }
+
+            default: break;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// fireRow — dispatch note events for one row (stride = 9 ints per track).
+// Must be called under mVoiceMutex.
+// ---------------------------------------------------------------------------
 void AudioEngine::fireRow(const QueuedRow& row) {
-    // noteData packed as groups of 3: [instrumentIdx, midiNote, volume_0_99]
-    const int stride = 3;
+    // Fire any still-pending delayed notes from the previous row immediately
+    for (const auto& dn : mPendingDelays) {
+        triggerNote(dn.instrIdx, dn.midiNote, dn.vol, dn.trackIdx,
+                    mCurrentRowLineSamples,
+                    dn.fx0cmd, dn.fx0val, dn.fx1cmd, dn.fx1val, 0, 0);
+    }
+    mPendingDelays.clear();
+    mCurrentRowLineSamples = row.lineSamples;
+
+    // noteData stride = 9: [instrIdx, midiNote, vol, fx0cmd, fx0val, fx1cmd, fx1val, fx2cmd, fx2val]
+    const int stride = 9;
     for (int i = 0; i + stride <= static_cast<int>(row.noteData.size()); i += stride) {
         const int instrIdx = row.noteData[i];
         const int midiNote = row.noteData[i + 1];
         const int vol      = row.noteData[i + 2];
+        const int fx0cmd   = row.noteData[i + 3];
+        const int fx0val   = row.noteData[i + 4];
+        const int fx1cmd   = row.noteData[i + 5];
+        const int fx1val   = row.noteData[i + 6];
+        const int fx2cmd   = row.noteData[i + 7];
+        const int fx2val   = row.noteData[i + 8];
 
         if (instrIdx < 0 || instrIdx >= kMaxVoices) continue;
 
-        // Track index: each group of 3 ints is one track (clamped to 0-7)
         const int trackIdx = std::min((i / stride), 7);
 
         if (midiNote == -2) {
             // Note off
             Voice& v = mVoices[instrIdx];
-            v.isActive = false;
-            v.gainTarget = 0.0f;
+            v.isActive    = false;
+            v.gainTarget  = 0.0f;
             v.isFadingOut = true;
             v.samplesUntilStop = v.releaseSamples > 0 ? v.releaseSamples : (mSampleRate / 100);
         } else if (midiNote >= 0) {
-            // Note on — only trigger if sample is loaded
-            if (!mSamples[instrIdx].isLoaded) continue;
-            const float freq  = midiToHz(midiNote);
-            const float level = vol >= 0 ? (vol / 99.0f) : 0.8f;
+            // Check for DEL: if found, schedule a delayed note instead of firing immediately
+            const int fxCmds[3] = {fx0cmd, fx1cmd, fx2cmd};
+            const int fxVals[3] = {fx0val, fx1val, fx2val};
 
-            Voice& v = mVoices[instrIdx];
-            const int32_t numFrames = mSamples[instrIdx].numFrames;
-            v.instrumentIdx   = instrIdx;
-            v.isActive        = true;
-            v.samplePosition  = 0.0;
-            v.startFrame      = 0.0;
-            v.endFrame        = static_cast<double>(numFrames);
-            v.frequency       = freq;
-            v.level           = level;
-            v.gain            = 0.0f;
-            v.gainTarget      = 1.0f;
-            v.isFadingOut     = false;
-            v.elapsedSamples  = 0;
-            v.attackSamples   = 0;
-            v.envLevel        = 1.0f;
-            v.loopMode        = 0;
-            v.pingDir         = false;
-            // Per-track send levels
-            v.reverbSend      = mTrackReverbSend[trackIdx];
-            v.delaySend       = mTrackDelaySend[trackIdx];
-            v.chorusSend      = mTrackChorusSend[trackIdx];
-            v.trackIdx        = trackIdx;
-            // Short release to avoid clicks
-            const float releaseTime = 0.05f;
-            v.releaseSamples  = static_cast<int32_t>(releaseTime * mSampleRate);
-            v.releaseK        = 1.0f - std::exp(-1.0f / (mSampleRate * std::max(releaseTime, 1e-4f)));
+            int delaySamples = 0;
+            for (int f = 0; f < 3; f++) {
+                if (fxCmds[f] == FX_DEL) {
+                    delaySamples = static_cast<int32_t>((fxVals[f] / 99.0f) * row.lineSamples);
+                    break;
+                }
+            }
+
+            if (delaySamples > 0) {
+                // Build DelayedNote — pack the non-DEL FX (up to 2 slots)
+                DelayedNote dn;
+                dn.instrIdx        = instrIdx;
+                dn.midiNote        = midiNote;
+                dn.vol             = vol;
+                dn.trackIdx        = trackIdx;
+                dn.samplesRemaining = delaySamples;
+                int slot = 0;
+                for (int f = 0; f < 3; f++) {
+                    if (fxCmds[f] == FX_DEL || fxCmds[f] == 0) continue;
+                    if (slot == 0) { dn.fx0cmd = fxCmds[f]; dn.fx0val = fxVals[f]; slot++; }
+                    else if (slot == 1) { dn.fx1cmd = fxCmds[f]; dn.fx1val = fxVals[f]; slot++; }
+                }
+                mPendingDelays.push_back(dn);
+            } else {
+                triggerNote(instrIdx, midiNote, vol, trackIdx, row.lineSamples,
+                            fx0cmd, fx0val, fx1cmd, fx1val, fx2cmd, fx2val);
+            }
         }
         // midiNote == -1 → hold/no change, skip
     }
@@ -436,6 +667,21 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
     std::fill(mChoSendR.begin(),mChoSendR.begin()+ numFrames, 0.0f);
 
     // -------------------------------------------------------------------
+    // DEL-delayed notes: decrement per buffer, fire notes that have expired
+    // -------------------------------------------------------------------
+    for (auto it = mPendingDelays.begin(); it != mPendingDelays.end(); ) {
+        it->samplesRemaining -= numFrames;
+        if (it->samplesRemaining <= 0) {
+            triggerNote(it->instrIdx, it->midiNote, it->vol, it->trackIdx,
+                        mCurrentRowLineSamples,
+                        it->fx0cmd, it->fx0val, it->fx1cmd, it->fx1val, 0, 0);
+            it = mPendingDelays.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // -------------------------------------------------------------------
     // Sequencer: advance rows sample-accurately
     // -------------------------------------------------------------------
     if (mSeqRunning && !mQueue.empty()) {
@@ -481,6 +727,7 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         Voice& voice = mVoices[v];
         if (!voice.isActive && voice.gain < 0.001f) continue;
 
+        if (voice.instrumentIdx < 0 || voice.instrumentIdx >= kMaxVoices) continue;
         const SampleData& sample = mSamples[voice.instrumentIdx];
         if (!sample.isLoaded) continue;
 
@@ -488,8 +735,71 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         const float delSend = voice.delaySend;
         const float choSend = voice.chorusSend;
 
+        // Precompute HP/LP Chamberlin SVF coefficients (log-scale freq mapping)
+        // HP: hpCutoff 0=bypass (20Hz), 1=max cut (20kHz)
+        // LP: lpCutoff 1=bypass (20kHz), 0=max cut (20Hz)
+        // Read atomically — filter params can be updated from UI thread without locking
+        const float hpCutoff = mInstrumentHpCutoff[v].load(std::memory_order_relaxed);
+        const float lpCutoff = mInstrumentLpCutoff[v].load(std::memory_order_relaxed);
+        const bool doHp = hpCutoff > 0.001f;
+        const bool doLp = lpCutoff < 0.999f;
+        // Audio EQ Cookbook biquad LP/HP — Butterworth Q = 1/√2.
+        // Computed once per buffer outside the hot loop; unconditionally stable at any frequency.
+        static constexpr float kBqQ = 0.7071f;
+        float hp_b0=0, hp_b1=0, hp_b2=0, hp_a1=0, hp_a2=0;
+        float lp_b0=0, lp_b1=0, lp_b2=0, lp_a1=0, lp_a2=0;
+        if (doHp) {
+            const float hz   = 20.0f * std::pow(1000.0f, hpCutoff);
+            const float w0   = 2.0f * static_cast<float>(M_PI) * hz / static_cast<float>(mSampleRate);
+            const float cosw = std::cos(w0);
+            const float alph = std::sin(w0) / (2.0f * kBqQ);
+            const float inv  = 1.0f / (1.0f + alph);
+            hp_b0 =  (1.0f + cosw) * 0.5f * inv;
+            hp_b1 = -(1.0f + cosw) * inv;
+            hp_b2 =  (1.0f + cosw) * 0.5f * inv;
+            hp_a1 = -2.0f * cosw * inv;
+            hp_a2 =  (1.0f - alph) * inv;
+        }
+        if (doLp) {
+            const float hz   = 20.0f * std::pow(1000.0f, lpCutoff);
+            const float w0   = 2.0f * static_cast<float>(M_PI) * hz / static_cast<float>(mSampleRate);
+            const float cosw = std::cos(w0);
+            const float alph = std::sin(w0) / (2.0f * kBqQ);
+            const float inv  = 1.0f / (1.0f + alph);
+            lp_b0 =  (1.0f - cosw) * 0.5f * inv;
+            lp_b1 =  (1.0f - cosw) * inv;
+            lp_b2 =  (1.0f - cosw) * 0.5f * inv;
+            lp_a1 = -2.0f * cosw * inv;
+            lp_a2 =  (1.0f - alph) * inv;
+        }
+
         float voicePeak = 0.0f;
         for (int i = 0; i < numFrames; ++i) {
+            // KIL: scheduled note cut
+            if (voice.kilCountdown > 0) {
+                if (--voice.kilCountdown == 0) {
+                    voice.isFadingOut = true;
+                    voice.gainTarget  = 0.0f;
+                    voice.isActive    = false;
+                }
+            }
+            // RET: retrigger at fixed intervals
+            if (voice.retCount > 0) {
+                if (++voice.retPhase >= voice.retPeriodSamples) {
+                    voice.retPhase       = 0;
+                    voice.retCount--;
+                    voice.samplePosition = voice.startFrame;
+                    voice.elapsedSamples = 0;
+                    voice.attackSamples  = 0;
+                    voice.envLevel       = 1.0f;
+                    voice.isFadingOut    = false;
+                    voice.gainTarget     = 1.0f;
+                    if (voice.retVolCurve > 0) {
+                        voice.level = std::max(0.0f, voice.level * (1.0f - voice.retVolCurve * 0.1f));
+                    }
+                }
+            }
+
             // Per-sample exponential gain smoothing — eliminates clicks at buffer edges
             voice.gain += smoothK * (voice.gainTarget - voice.gain);
 
@@ -535,8 +845,68 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                 envelope = voice.envLevel;
             }
 
-            float samp = processSample(voice, sample);
+            // --- Compute effective frequency (SLU/SLD, ARP, VIB) ---
+            float effFreq = voice.frequency;
+
+            // SLU/SLD: ramp frequency toward target
+            if (voice.slideRateHz != 0.0f) {
+                voice.frequency += voice.slideRateHz;
+                if ((voice.slideRateHz > 0.0f && voice.frequency >= voice.slideTargetHz) ||
+                    (voice.slideRateHz < 0.0f && voice.frequency <= voice.slideTargetHz)) {
+                    voice.frequency   = voice.slideTargetHz;
+                    voice.slideRateHz = 0.0f;
+                }
+                effFreq = voice.frequency;
+            }
+
+            // ARP: step through semitone intervals
+            if (voice.arpStepSamples > 0) {
+                if (++voice.arpPhase >= voice.arpStepSamples) {
+                    voice.arpPhase = 0;
+                    voice.arpStep  = (voice.arpStep + 1) % 3;
+                }
+                const int semis = (voice.arpStep == 0) ? 0
+                                : (voice.arpStep == 1) ? voice.arpInterval1
+                                :                        voice.arpInterval2;
+                effFreq = voice.arpBaseFreq * std::pow(2.0f, semis / 12.0f);
+            }
+
+            // VIB: pitch LFO (sine, in cents)
+            if (voice.vibRateRad > 0.0f) {
+                effFreq *= std::pow(2.0f, (voice.vibDepthCents / 1200.0f) * std::sin(voice.vibPhase));
+                voice.vibPhase += voice.vibRateRad;
+                if (voice.vibPhase >= 6.2831853f) voice.vibPhase -= 6.2831853f;
+            }
+
+            float samp = processSample(voice, sample, effFreq);
             samp *= voice.gain * voice.level * envelope;
+
+            // TRE: tremolo (sine amplitude LFO)
+            if (voice.treRateRad > 0.0f) {
+                samp *= (1.0f - voice.treDepth * (0.5f + 0.5f * std::sin(voice.trePhase)));
+                voice.trePhase += voice.treRateRad;
+                if (voice.trePhase >= 6.2831853f) voice.trePhase -= 6.2831853f;
+            }
+            // GAT: gate (square-wave amplitude LFO)
+            if (voice.gatRateRad > 0.0f) {
+                samp *= (std::sin(voice.gatPhase) >= 0.0f) ? 1.0f : (1.0f - voice.gatDepth);
+                voice.gatPhase += voice.gatRateRad;
+                if (voice.gatPhase >= 6.2831853f) voice.gatPhase -= 6.2831853f;
+            }
+
+            // Biquad HP then LP — Direct Form II Transposed (mono), stable at any frequency
+            if (doHp) {
+                const float y = hp_b0 * samp + voice.hpS1;
+                voice.hpS1 = hp_b1 * samp - hp_a1 * y + voice.hpS2;
+                voice.hpS2 = hp_b2 * samp - hp_a2 * y;
+                samp = y;
+            }
+            if (doLp) {
+                const float y = lp_b0 * samp + voice.lpS1;
+                voice.lpS1 = lp_b1 * samp - lp_a1 * y + voice.lpS2;
+                voice.lpS2 = lp_b2 * samp - lp_a2 * y;
+                samp = y;
+            }
 
             // Equal-power stereo pan
             float angle = voice.pan * 1.5707963f; // pan * π/2
@@ -613,15 +983,15 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
     return oboe::DataCallbackResult::Continue;
 }
 
-float AudioEngine::processSample(Voice& voice, const SampleData& sample) {
+float AudioEngine::processSample(Voice& voice, const SampleData& sample, float effFrequency) {
     if (sample.numFrames == 0) return 0.0f;
 
-    // Sample rate conversion ratio, adjusted by frequency (pitch control).
+    // Sample rate conversion ratio, adjusted by effective frequency (pitch + all FX LFOs).
     // Reference: C-4 (MIDI 60 = 261.626 Hz) plays the sample at original speed (1×).
     static constexpr double kRootHz = 261.626; // C-4
-    double sampleStep = (double)sample.sampleRate / (double)mSampleRate * (double)voice.frequency / kRootHz;
-    
-    // For PING mode: reverse direction when needed
+    double sampleStep = (double)sample.sampleRate / (double)mSampleRate * (double)effFrequency / kRootHz;
+
+    // pingDir: used by both PING loop mode and REV fx — negative step goes backwards
     if (voice.pingDir) {
         sampleStep = -sampleStep;
     }
@@ -643,13 +1013,22 @@ float AudioEngine::processSample(Voice& voice, const SampleData& sample) {
     // Handle end/start boundary based on loop mode
     double startAt = voice.startFrame;
     double stopAt = (voice.endFrame > 0.0) ? voice.endFrame : (double)sample.numFrames;
-    
+
     if (voice.loopMode == 0) {
-        // OFF: stop at end
-        if (voice.samplePosition >= stopAt) {
-            voice.isActive = false;
-            voice.gainTarget = 0.0f;
-            voice.isFadingOut = true;
+        if (voice.pingDir) {
+            // REV (reversed, no loop): stop when position goes below startAt
+            if (voice.samplePosition < startAt) {
+                voice.isActive    = false;
+                voice.gainTarget  = 0.0f;
+                voice.isFadingOut = true;
+            }
+        } else {
+            // OFF (forward, no loop): stop at end
+            if (voice.samplePosition >= stopAt) {
+                voice.isActive    = false;
+                voice.gainTarget  = 0.0f;
+                voice.isFadingOut = true;
+            }
         }
     } else if (voice.loopMode == 1) {
         // LOOP: wrap forward
@@ -901,6 +1280,34 @@ void AudioEngine::setTrackSends(int trackIdx, float rev, float del, float cho) {
     mTrackChorusSend[trackIdx] = cho;
 }
 
+void AudioEngine::setInstrumentSends(int instrIdx, float rev, float del, float cho) {
+    if (instrIdx < 0 || instrIdx >= kMaxVoices) return;
+    // Atomic stores — no mutex needed; audio thread reads these atomically
+    mInstrumentRevSend[instrIdx].store(std::clamp(rev, 0.0f, 1.0f), std::memory_order_relaxed);
+    mInstrumentDelSend[instrIdx].store(std::clamp(del, 0.0f, 1.0f), std::memory_order_relaxed);
+    mInstrumentChoSend[instrIdx].store(std::clamp(cho, 0.0f, 1.0f), std::memory_order_relaxed);
+}
+
+void AudioEngine::setInstrumentFilters(int instrIdx, float hpNorm, float lpNorm) {
+    if (instrIdx < 0 || instrIdx >= kMaxVoices) return;
+    // Atomic store — no mutex needed; audio callback reads these atomically, so no blocking
+    mInstrumentHpCutoff[instrIdx].store(std::clamp(hpNorm, 0.0f, 1.0f), std::memory_order_relaxed);
+    mInstrumentLpCutoff[instrIdx].store(std::clamp(lpNorm, 0.0f, 1.0f), std::memory_order_relaxed);
+}
+
+void AudioEngine::setInstrumentPlaybackParams(int instrIdx, float pitch, float volume,
+                                               float startNorm, float endNorm,
+                                               float attackSec, float releaseSec, int loopMode) {
+    if (instrIdx < 0 || instrIdx >= kMaxVoices) return;
+    mInstrumentPitch[instrIdx].store(pitch, std::memory_order_relaxed);
+    mInstrumentVolume[instrIdx].store(std::clamp(volume, 0.0f, 1.0f), std::memory_order_relaxed);
+    mInstrumentStartNorm[instrIdx].store(std::clamp(startNorm, 0.0f, 1.0f), std::memory_order_relaxed);
+    mInstrumentEndNorm[instrIdx].store(std::clamp(endNorm, 0.0f, 1.0f), std::memory_order_relaxed);
+    mInstrumentAttack[instrIdx].store(std::max(attackSec, 0.0f), std::memory_order_relaxed);
+    mInstrumentRelease[instrIdx].store(std::max(releaseSec, 0.001f), std::memory_order_relaxed);
+    mInstrumentLoopMode[instrIdx].store(loopMode, std::memory_order_relaxed);
+}
+
 void AudioEngine::setReverbSize(float norm) {
     if (mMasterFX) mMasterFX->setReverbSize(norm);
 }
@@ -1083,6 +1490,27 @@ Java_com_example_lmt_AudioEnginePlugin_nativeSetLimiterThreshold(JNIEnv *env, jo
 JNIEXPORT void JNICALL
 Java_com_example_lmt_AudioEnginePlugin_nativeSetMasterVolume(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
     reinterpret_cast<AudioEngine*>(handle)->setMasterVolume(norm);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetInstrumentSends(JNIEnv *env, jobject obj, jlong handle,
+                                                                  jint instrIdx, jfloat rev, jfloat del, jfloat cho) {
+    reinterpret_cast<AudioEngine*>(handle)->setInstrumentSends(static_cast<int>(instrIdx), rev, del, cho);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetInstrumentFilters(JNIEnv *env, jobject obj, jlong handle,
+                                                                    jint instrIdx, jfloat hpNorm, jfloat lpNorm) {
+    reinterpret_cast<AudioEngine*>(handle)->setInstrumentFilters(static_cast<int>(instrIdx), hpNorm, lpNorm);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetInstrumentPlaybackParams(JNIEnv *env, jobject obj, jlong handle,
+                                                                          jint instrIdx, jfloat pitch, jfloat volume,
+                                                                          jfloat startNorm, jfloat endNorm,
+                                                                          jfloat attackSec, jfloat releaseSec, jint loopMode) {
+    reinterpret_cast<AudioEngine*>(handle)->setInstrumentPlaybackParams(
+        static_cast<int>(instrIdx), pitch, volume, startNorm, endNorm, attackSec, releaseSec, static_cast<int>(loopMode));
 }
 
 } // extern "C"

@@ -45,6 +45,12 @@ class _SamplerWindowState extends State<SamplerWindow> {
     super.initState();
     sampler = model.getSampler(instrumentIdx);
     _loadWaveformPeaks();
+    // Push current instrument sends + filters to the native engine
+    NativeAudioEngine.setInstrumentSends(
+        instrumentIdx, sampler.revSend, sampler.delSend, sampler.modSend);
+    NativeAudioEngine.setInstrumentFilters(
+        instrumentIdx, sampler.hpCutoff, sampler.lpCutoff);
+    _pushPlaybackParams();
   }
 
   Future<void> _loadWaveformPeaks() async {
@@ -79,6 +85,20 @@ class _SamplerWindowState extends State<SamplerWindow> {
       NativeAudioEngine.noteOff(instrumentIdx);
     }
     super.dispose();
+  }
+
+  /// Push current sampler playback params to native so fireRow() matches the preview.
+  void _pushPlaybackParams() {
+    NativeAudioEngine.setInstrumentPlaybackParams(
+      instrumentIdx,
+      sampler.pitch,
+      sampler.volume,
+      sampler.start,
+      sampler.end,
+      sampler.attack * 0.5,   // 0..1 → 0..500ms (same conversion as preview)
+      sampler.release * 0.5,  // 0..1 → 0..500ms
+      sampler.loopMode,
+    );
   }
 
   /// Calculate the duration of the current preview region (start → end)
@@ -647,8 +667,10 @@ class _SamplerWindowState extends State<SamplerWindow> {
                               }
                             }
                             
-                            // Apply pitch: frequency * 2^(pitch/12)
-                            final baseFreq = 440.0;
+                            // Apply pitch: baseFreq is C4 (261.626 Hz) — same root as C++ kRootHz,
+                            // so at pitch=0 the sample plays at original speed (matching sequencer).
+                            // pitch is stored as -1..1 = -12..+12 semitones, so exponent = pitch (octaves).
+                            const baseFreq = 261.626;
                             final pitchFreq = baseFreq * math.pow(2.0, currentSampler.pitch);
                             // Convert attack/release from 0..1 normalized (0..500ms) to seconds
                             final attackSec = currentSampler.attack * 0.5;  // 0..1 → 0..500ms → 0..0.5s
@@ -769,7 +791,10 @@ class _SamplerWindowState extends State<SamplerWindow> {
                   _buildParamRow(
                     'PITCH',
                     sampler.pitch,
-                    (newVal) => sampler.pitch = newVal,
+                    (newVal) {
+                      sampler.pitch = newVal;
+                      _pushPlaybackParams();
+                    },
                     sampler.getPitchDisplay(),
                     'st',  // semitones
                     -1.0,
@@ -782,7 +807,10 @@ class _SamplerWindowState extends State<SamplerWindow> {
                   _buildParamRow(
                     'VOL',
                     sampler.volume,
-                    (newVal) => sampler.volume = newVal,
+                    (newVal) {
+                      sampler.volume = newVal;
+                      _pushPlaybackParams();
+                    },
                     sampler.getVolumeDisplay(),
                     '%',
                     0.0,
@@ -797,7 +825,8 @@ class _SamplerWindowState extends State<SamplerWindow> {
                     sampler.start,
                     (newVal) {
                       sampler.start = newVal.clamp(0.0, sampler.end - 0.01);
-                      _loadWaveformPeaks();  // Refresh waveform
+                      _loadWaveformPeaks();
+                      _pushPlaybackParams();
                     },
                     sampler.getStartDisplay(),
                     '%',
@@ -813,7 +842,8 @@ class _SamplerWindowState extends State<SamplerWindow> {
                     sampler.end,
                     (newVal) {
                       sampler.end = newVal.clamp(sampler.start + 0.01, 1.0);
-                      _loadWaveformPeaks();  // Refresh waveform
+                      _loadWaveformPeaks();
+                      _pushPlaybackParams();
                     },
                     sampler.getEndDisplay(),
                     '%',
@@ -830,6 +860,7 @@ class _SamplerWindowState extends State<SamplerWindow> {
                     (newVal) {
                       sampler.attack = newVal;
                       setState(() {});
+                      _pushPlaybackParams();
                     },
                     sampler.getAttackDisplay(),
                     'ms',
@@ -846,6 +877,7 @@ class _SamplerWindowState extends State<SamplerWindow> {
                     (newVal) {
                       sampler.release = newVal;
                       setState(() {});
+                      _pushPlaybackParams();
                     },
                     sampler.getReleaseDisplay(),
                     'ms',
@@ -874,7 +906,11 @@ class _SamplerWindowState extends State<SamplerWindow> {
                   _buildParamRow(
                     'MOD',
                     sampler.modSend,
-                    (newVal) => sampler.modSend = newVal,
+                    (newVal) {
+                      sampler.modSend = newVal;
+                      NativeAudioEngine.setInstrumentSends(
+                          instrumentIdx, sampler.revSend, sampler.delSend, sampler.modSend);
+                    },
                     sampler.getModDisplay(),
                     '%',
                     0.0,
@@ -887,7 +923,11 @@ class _SamplerWindowState extends State<SamplerWindow> {
                   _buildParamRow(
                     'DEL',
                     sampler.delSend,
-                    (newVal) => sampler.delSend = newVal,
+                    (newVal) {
+                      sampler.delSend = newVal;
+                      NativeAudioEngine.setInstrumentSends(
+                          instrumentIdx, sampler.revSend, sampler.delSend, sampler.modSend);
+                    },
                     sampler.getDelDisplay(),
                     '%',
                     0.0,
@@ -900,7 +940,11 @@ class _SamplerWindowState extends State<SamplerWindow> {
                   _buildParamRow(
                     'REV',
                     sampler.revSend,
-                    (newVal) => sampler.revSend = newVal,
+                    (newVal) {
+                      sampler.revSend = newVal;
+                      NativeAudioEngine.setInstrumentSends(
+                          instrumentIdx, sampler.revSend, sampler.delSend, sampler.modSend);
+                    },
                     sampler.getRevDisplay(),
                     '%',
                     0.0,
@@ -913,7 +957,11 @@ class _SamplerWindowState extends State<SamplerWindow> {
                   _buildParamRow(
                     'LP',
                     sampler.lpCutoff,
-                    (newVal) => sampler.lpCutoff = newVal,
+                    (newVal) {
+                      sampler.lpCutoff = newVal;
+                      NativeAudioEngine.setInstrumentFilters(
+                          instrumentIdx, sampler.hpCutoff, sampler.lpCutoff);
+                    },
                     sampler.getLpDisplay(),
                     '',
                     0.0,
@@ -926,7 +974,11 @@ class _SamplerWindowState extends State<SamplerWindow> {
                   _buildParamRow(
                     'HP',
                     sampler.hpCutoff,
-                    (newVal) => sampler.hpCutoff = newVal,
+                    (newVal) {
+                      sampler.hpCutoff = newVal;
+                      NativeAudioEngine.setInstrumentFilters(
+                          instrumentIdx, sampler.hpCutoff, sampler.lpCutoff);
+                    },
                     sampler.getHpDisplay(),
                     '',
                     0.0,
@@ -1028,6 +1080,7 @@ class _SamplerWindowState extends State<SamplerWindow> {
                   setState(() {
                     sampler.loopMode = i;
                   });
+                  _pushPlaybackParams();
                 },
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),

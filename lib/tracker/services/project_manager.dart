@@ -192,6 +192,7 @@ class ProjectManager {
       'created': DateTime.now().toIso8601String(),
       'projectName': model.currentProjectName,
       'bpm': model.song.bpm,
+      'lpb': model.song.lpb,
       'chains': [
         for (int i = 0; i < model.song.chains.length; i++)
           List<int>.from(model.song.chains[i])
@@ -255,8 +256,9 @@ class ProjectManager {
     final model = TrackerModel();
     final samplesDir = projectDir != null ? '${projectDir.path}/$samplesFolder' : '';
 
-    // Load BPM
+    // Load BPM / LPB
     model.song.bpm = json['bpm'] as int? ?? 120;
+    model.song.lpb = (json['lpb'] as int? ?? 4).clamp(1, 12);
 
     // Load chains (song grid — which chain each song row/track references)
     if (json['chains'] is List) {
@@ -347,6 +349,13 @@ class ProjectManager {
           if (instData['sampler'] is Map) {
             model.instruments[i].sampler =
                 _jsonToSampler(instData['sampler'] as Map<String, dynamic>, samplesDir);
+          }
+          // Sync sampler.samplePath from inst.sample if missing (old project format)
+          final sp = model.instruments[i].sampler.samplePath;
+          if ((sp == null || sp.isEmpty) && model.instruments[i].sample.isNotEmpty) {
+            final raw = model.instruments[i].sample;
+            model.instruments[i].sampler.samplePath = raw;
+            model.instruments[i].sampler.sampleName = path_lib.basename(raw);
           }
         }
       }

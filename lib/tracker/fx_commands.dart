@@ -70,6 +70,18 @@ const Map<String, ({String desc, String value, String windows})> kFxCommands = {
   // … M21–M26, M31–M36 … M81–M86 follow the same pattern for channels 2–8
 };
 
+// ── FX command integer IDs (packed into C++ wire format) ─────────────────
+// BPM, LPB, TPO, HOP, CHA are Dart-only — consumed at row-build time, id=0 for C++.
+const Map<String, int> kFxId = {
+  'VOL':  1,  'PAN':  2,  'REV':  3,  'DEL':  4,  'RET':  5,
+  'KIL':  6,  'CHA':  7,  'ARP':  8,  'SLU':  9,  'SLD': 10,
+  'VIB': 11,  'PIT': 12,  'TRE': 13,  'GAT': 14,  'SNR': 15,
+  'SND': 16,  'SNC': 17,  'SLC': 18,
+};
+
+/// Map BPM FX value (00–99) to BPM (60–240).
+int fxValToBpm(int val) => (60 + val * 180 ~/ 99).clamp(60, 240);
+
 // ── Mixer command helper ───────────────────────────────────────────────────
 // Returns the description for any Mxy command dynamically.
 String? mixerCommandDesc(String cmd) {

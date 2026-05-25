@@ -37,6 +37,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   bool _playingPhraseMode  = false; // true when playing from Phrase window
   int _phraseLen           = 0;   // step count for phrase-mode loop wrap
   Timer? _autoSaveTimer;
+  final FocusNode _keyListenerFocusNode = FocusNode();
 
   @override
   void initState() {
@@ -58,6 +59,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     _autoSaveTimer?.cancel();
     _stepTimer?.cancel();
     _meterTimer?.cancel();
+    _keyListenerFocusNode.dispose();
     super.dispose();
   }
 
@@ -329,7 +331,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   @override
   Widget build(BuildContext context) {
     return RawKeyboardListener(
-      focusNode: FocusNode()..requestFocus(),
+      focusNode: _keyListenerFocusNode,
       onKey: _handleKey,
       child: Scaffold(
         backgroundColor: Colors.black,
@@ -394,9 +396,8 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
             ),
             // Spacer between nav and content (one line height)
             const SizedBox(height: 28),
-            // Content area (shows rows 0-16)
-            SizedBox(
-              height: 540, // Header (28) + 18 rows (18*28)
+            // Content area — Expanded fills exactly the remaining space, no overflow possible
+            Expanded(
               child: _buildWindow(),
             ),
             // Spacer between content and mixer (one line height)
@@ -617,55 +618,47 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   }
 
   Widget _buildProjectMenu() {
-    const menuItems = ['SAVE SONG', 'SAVE AS...', 'NEW SONG', 'LOAD SONG', 'SET TEMPO', 'FOLDER'];
+    const menuItems = ['SAVE SONG', 'SAVE AS...', 'NEW SONG', 'LOAD SONG', 'SONG SETTINGS', 'FOLDER'];
 
     return Positioned(
       right: 8,
       top: 380,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final fontSize = (constraints.maxWidth * 0.12).clamp(14.0, 24.0);
-          final itemHeight = 40.0;
-          const itemWidth = 120.0;
-
-          return Container(
-            width: itemWidth,
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.white, width: 2),
-              color: kBarBg,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: menuItems.map((item) {
-                return GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      model.projectMenuVisible = false;
-                    });
-                    _handleProjectMenuAction(item);
-                  },
-                  child: Container(
-                    height: itemHeight,
-                    decoration: BoxDecoration(
-                      border: Border(
-                        bottom: BorderSide(
-                          color: item == menuItems.last ? Colors.transparent : Colors.white,
-                          width: 1,
-                        ),
-                      ),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      item,
-                      style: trackerStyle(size: fontSize, color: Colors.white),
-                      textAlign: TextAlign.center,
+      child: Container(
+        width: 170,
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.white, width: 2),
+          color: kBarBg,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: menuItems.map((item) {
+            return GestureDetector(
+              onTap: () {
+                setState(() {
+                  model.projectMenuVisible = false;
+                });
+                _handleProjectMenuAction(item);
+              },
+              child: Container(
+                height: 40,
+                decoration: BoxDecoration(
+                  border: Border(
+                    bottom: BorderSide(
+                      color: item == menuItems.last ? Colors.transparent : Colors.white,
+                      width: 1,
                     ),
                   ),
-                );
-              }).toList(),
-            ),
-          );
-        },
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  item,
+                  style: trackerStyle(size: 20, color: Colors.white),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            );
+          }).toList(),
+        ),
       ),
     );
   }
@@ -695,12 +688,18 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         showDialog(
           context: context,
           builder: (BuildContext ctx) => AlertDialog(
-            title: const Text('New Song'),
-            content: const Text('Clear all song data and start fresh?'),
+            backgroundColor: Colors.black,
+            elevation: 0,
+            shape: const RoundedRectangleBorder(
+              side: BorderSide(color: Colors.white54),
+              borderRadius: BorderRadius.zero,
+            ),
+            title: Text('New Song', style: trackerStyle(size: 22, color: Colors.white)),
+            content: Text('Clear all song data and start fresh?', style: trackerStyle(size: 18)),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel'),
+                child: Text('Cancel', style: trackerStyle(size: 18, color: Colors.white54)),
               ),
               TextButton(
                 onPressed: () {
@@ -708,7 +707,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                   model.newSong();
                   setState(() {});
                 },
-                child: const Text('Create'),
+                child: Text('Create', style: trackerStyle(size: 18, color: kGreen)),
               ),
             ],
           ),
@@ -719,8 +718,8 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         _showLoadSongDialog();
         break;
 
-      case 'SET TEMPO':
-        _showSetTempoDialog();
+      case 'SONG SETTINGS':
+        _showSongSettingsDialog();
         break;
 
       case 'FOLDER':
@@ -738,11 +737,19 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
-          backgroundColor: Colors.black87,
-          title: Text('Load Song', style: trackerStyle(size: 16)),
-          content: Text('No saved projects found.', style: trackerStyle(size: 13)),
+          backgroundColor: Colors.black,
+          elevation: 0,
+          shape: const RoundedRectangleBorder(
+            side: BorderSide(color: Colors.white54),
+            borderRadius: BorderRadius.zero,
+          ),
+          title: Text('Load Song', style: trackerStyle(size: 22, color: Colors.white)),
+          content: Text('No saved projects found.', style: trackerStyle(size: 18)),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text('OK', style: trackerStyle(size: 18, color: kGreen)),
+            ),
           ],
         ),
       );
@@ -755,8 +762,13 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     final selectedDir = await showDialog<Directory>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.black87,
-        title: Text('Load Song', style: trackerStyle(size: 16)),
+        backgroundColor: Colors.black,
+        elevation: 0,
+        shape: const RoundedRectangleBorder(
+          side: BorderSide(color: Colors.white54),
+          borderRadius: BorderRadius.zero,
+        ),
+        title: Text('Load Song', style: trackerStyle(size: 22, color: Colors.white)),
         content: SizedBox(
           width: double.maxFinite,
           child: ListView.builder(
@@ -764,9 +776,15 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
             itemCount: projects.length,
             itemBuilder: (_, i) {
               final name = ProjectManager.getProjectName(projects[i]);
-              return ListTile(
-                title: Text(name, style: trackerStyle(size: 14, color: kGreen)),
+              return InkWell(
                 onTap: () => Navigator.pop(ctx, projects[i]),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                  decoration: const BoxDecoration(
+                    border: Border(bottom: BorderSide(color: Colors.white12)),
+                  ),
+                  child: Text(name, style: trackerStyle(size: 18, color: kGreen)),
+                ),
               );
             },
           ),
@@ -774,7 +792,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
+            child: Text('Cancel', style: trackerStyle(size: 18, color: Colors.white54)),
           ),
         ],
       ),
@@ -813,49 +831,180 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     });
   }
 
-  Future<void> _showSetTempoDialog() async {
-    String bpmText = model.song.bpm.toString();
-    final result = await showDialog<int>(
+  Future<void> _showSongSettingsDialog() async {
+    int bpmVal = model.song.bpm;
+    int lpbVal = model.song.lpb;
+
+    final result = await showDialog<(int, int)>(
       context: context,
+      barrierColor: Colors.black54,
       builder: (ctx) {
-        final ctrl = TextEditingController(text: bpmText);
-        return AlertDialog(
-          backgroundColor: Colors.black87,
-          title: Text('Set Tempo', style: trackerStyle(size: 16)),
-          content: TextField(
-            autofocus: true,
-            keyboardType: TextInputType.number,
-            controller: ctrl,
-            style: trackerStyle(size: 14, color: kGreen),
-            decoration: const InputDecoration(
-              hintText: '60 – 300',
-              border: OutlineInputBorder(),
-              suffixText: 'BPM',
-            ),
-            onChanged: (v) => bpmText = v,
-            onSubmitted: (v) {
-              final bpm = int.tryParse(v);
-              if (bpm != null) Navigator.pop(ctx, bpm.clamp(60, 300));
-            },
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () {
-                final bpm = int.tryParse(bpmText);
-                if (bpm != null) Navigator.pop(ctx, bpm.clamp(60, 300));
-              },
-              child: const Text('OK'),
-            ),
-          ],
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            void adjustBpm(int delta) =>
+                setDialogState(() => bpmVal = (bpmVal + delta).clamp(60, 300));
+            void adjustLpb(int delta) =>
+                setDialogState(() => lpbVal = (lpbVal + delta).clamp(1, 12));
+
+            // A single spinner row: label / range hint / [−] [value] [+]
+            Widget spinRow({
+              required String label,
+              required String range,
+              required int value,
+              required void Function(int) onAdjust,
+            }) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Label + range
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(label, style: trackerStyle(size: 26, color: Colors.white)),
+                      Text(range, style: trackerStyle(size: 20, color: Colors.white54)),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  // Spinner
+                  Container(
+                    decoration: const BoxDecoration(
+                      border: Border.fromBorderSide(BorderSide(color: Colors.white, width: 1)),
+                    ),
+                    child: Row(
+                      children: [
+                        // − button
+                        GestureDetector(
+                          onTap: () => onAdjust(-1),
+                          child: Container(
+                            width: 56,
+                            height: 64,
+                            decoration: const BoxDecoration(
+                              border: Border(right: BorderSide(color: Colors.white, width: 1)),
+                            ),
+                            alignment: Alignment.center,
+                            child: Text('−', style: trackerStyle(size: 40, color: Colors.white)),
+                          ),
+                        ),
+                        // Value display
+                        Expanded(
+                          child: Text(
+                            value.toString(),
+                            textAlign: TextAlign.center,
+                            style: trackerStyle(size: 28, color: kGreen),
+                          ),
+                        ),
+                        // + button
+                        GestureDetector(
+                          onTap: () => onAdjust(1),
+                          child: Container(
+                            width: 56,
+                            height: 64,
+                            decoration: const BoxDecoration(
+                              border: Border(left: BorderSide(color: Colors.white, width: 1)),
+                            ),
+                            alignment: Alignment.center,
+                            child: Text('+', style: trackerStyle(size: 40, color: Colors.white)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            }
+
+            return Dialog(
+              backgroundColor: Colors.black,
+              elevation: 0,
+              insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 80),
+              child: Container(
+                decoration: const BoxDecoration(
+                  color: Colors.black,
+                  border: Border.fromBorderSide(BorderSide(color: Colors.white, width: 2)),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Title bar
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      decoration: const BoxDecoration(
+                        border: Border(bottom: BorderSide(color: Colors.white, width: 1)),
+                      ),
+                      child: Text(
+                        'SONG SETTINGS',
+                        style: trackerStyle(size: 28, color: Colors.white),
+                      ),
+                    ),
+                    // Body
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          spinRow(
+                            label: 'BPM',
+                            range: '60 – 300',
+                            value: bpmVal,
+                            onAdjust: adjustBpm,
+                          ),
+                          const SizedBox(height: 24),
+                          spinRow(
+                            label: 'LPB',
+                            range: '1 – 12',
+                            value: lpbVal,
+                            onAdjust: adjustLpb,
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Footer buttons
+                    Container(
+                      decoration: const BoxDecoration(
+                        border: Border(top: BorderSide(color: Colors.white, width: 1)),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () => Navigator.pop(ctx),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                alignment: Alignment.center,
+                                child: Text('CANCEL',
+                                    style: trackerStyle(size: 24, color: Colors.white54)),
+                              ),
+                            ),
+                          ),
+                          Container(width: 1, color: Colors.white),
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () => Navigator.pop(ctx, (bpmVal, lpbVal)),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                alignment: Alignment.center,
+                                child: Text('OK',
+                                    style: trackerStyle(size: 24, color: kGreen)),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
         );
       },
     );
     if (result != null) {
-      setState(() => model.song.bpm = result);
+      setState(() {
+        model.song.bpm = result.$1;
+        model.song.lpb = result.$2;
+      });
     }
   }
 
@@ -866,24 +1015,40 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: Text(title),
+          backgroundColor: Colors.black,
+          elevation: 0,
+          shape: const RoundedRectangleBorder(
+            side: BorderSide(color: Colors.white54),
+            borderRadius: BorderRadius.zero,
+          ),
+          title: Text(title, style: trackerStyle(size: 22, color: Colors.white)),
           content: TextField(
+            autofocus: true,
             onChanged: (value) {
               projectName = value;
             },
+            onSubmitted: (value) => Navigator.of(context).pop(value.isNotEmpty ? value : projectName),
+            style: trackerStyle(size: 18, color: kGreen),
+            cursorColor: kGreen,
             decoration: InputDecoration(
               hintText: model.currentProjectName,
-              border: OutlineInputBorder(),
+              hintStyle: trackerStyle(size: 18, color: Colors.white30),
+              enabledBorder: const OutlineInputBorder(
+                borderSide: BorderSide(color: Colors.white38),
+              ),
+              focusedBorder: const OutlineInputBorder(
+                borderSide: BorderSide(color: Colors.green),
+              ),
             ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(null),
-              child: const Text('Cancel'),
+              child: Text('Cancel', style: trackerStyle(size: 18, color: Colors.white54)),
             ),
             TextButton(
               onPressed: () => Navigator.of(context).pop(projectName),
-              child: const Text('OK'),
+              child: Text('OK', style: trackerStyle(size: 18, color: kGreen)),
             ),
           ],
         );

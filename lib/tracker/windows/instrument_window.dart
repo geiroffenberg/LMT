@@ -101,6 +101,10 @@ class _InstrumentWindowState extends State<InstrumentWindow> {
                         model.loadSampleForInstrument(instrumentIndex, samplePath);
                         await NativeAudioEngine.loadSample(instrumentIndex, samplePath);
                         setState(() {});
+                      } else {
+                        // Restore correct sample — browser preview may have clobbered this slot
+                        final orig = model.instruments[instrumentIndex].sample;
+                        if (orig.isNotEmpty) await NativeAudioEngine.loadSample(instrumentIndex, orig);
                       }
                     },
                     style: ElevatedButton.styleFrom(
@@ -190,6 +194,10 @@ class _InstrumentWindowState extends State<InstrumentWindow> {
                             model.loadSampleForInstrument(row, samplePath);
                             await NativeAudioEngine.loadSample(row, samplePath);
                             onStateChange();
+                          } else {
+                            // Restore correct sample — browser preview may have clobbered this slot
+                            final orig = model.instruments[row].sample;
+                            if (orig.isNotEmpty) await NativeAudioEngine.loadSample(row, orig);
                           }
                         },
                         child: Container(

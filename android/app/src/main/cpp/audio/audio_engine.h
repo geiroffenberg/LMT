@@ -34,7 +34,7 @@ struct Voice {
     float level = 0.8f;           // 0..1 volume
     float pan = 0.5f;             // 0..1 pan (0=left, 1=right)
     float gainTarget = 0.0f;       // target gain for fade-out
-    float gain = 1.0f;             // current smoothed gain
+    float gain = 0.0f;             // current smoothed gain (0 = silent/inactive)
     bool isFadingOut = false;
     int samplesUntilStop = 0;
     int32_t elapsedSamples = 0;    // samples since noteOn
@@ -51,24 +51,68 @@ struct Voice {
 
     int   trackIdx   = -1;         // 0-7 mixer track (set by fireRow)
 
-    float cutoffNorm = 0.7f;       // 0..1 filter cutoff
-    float resonanceNorm = 0.2f;    // 0..1 filter resonance
+    // Per-instrument HP/LP Chamberlin SVF
+    float hpCutoff = 0.0f;         // 0..1 norm (0 = bypass)
+    float lpCutoff = 1.0f;         // 0..1 norm (1 = bypass)
+    // Per-voice biquad filter state (Direct Form II Transposed, mono)
+    float hpS1 = 0.0f, hpS2 = 0.0f;  // HP biquad delay elements
+    float lpS1 = 0.0f, lpS2 = 0.0f;  // LP biquad delay elements
 
-    // State-variable filter state
-    float filterLow = 0.0f;
-    float filterBand = 0.0f;
+    // ---- Per-note FX modulation state (set by triggerNote, read in onAudioReady) ----
+    // KIL: scheduled note cut
+    int32_t kilCountdown = -1;      // samples until voice is cut (-1 = not scheduled)
+    // REV: reverse playback (reuses pingDir; set samplePosition = endFrame-1 at note-on)
+    // ARP: arpeggio
+    float arpBaseFreq   = 0.0f;    // root frequency (Hz) for arp
+    int   arpStep       = 0;       // current arp position (0=root, 1=1st, 2=2nd)
+    int   arpStepSamples= 0;       // samples per arp step (lineSamples/3)
+    int   arpPhase      = 0;       // samples since last step advance
+    int   arpInterval1  = 0;       // 1st interval in semitones
+    int   arpInterval2  = 0;       // 2nd interval in semitones
+    // SLU/SLD: pitch slide
+    float slideTargetHz = 0.0f;    // destination frequency
+    float slideRateHz   = 0.0f;    // Hz change per sample (0 = inactive)
+    // VIB: pitch LFO (sine)
+    float vibPhase      = 0.0f;    // 0..2π
+    float vibRateRad    = 0.0f;    // radians per sample (0 = off)
+    float vibDepthCents = 0.0f;    // ± cents at peak
+    // TRE: tremolo (sine amplitude LFO)
+    float trePhase      = 0.0f;
+    float treRateRad    = 0.0f;    // radians per sample (0 = off)
+    float treDepth      = 0.0f;    // 0..1
+    // GAT: gate (square wave amplitude LFO)
+    float gatPhase      = 0.0f;
+    float gatRateRad    = 0.0f;    // radians per sample (0 = off)
+    float gatDepth      = 0.0f;    // 0..1
+    // RET: retrigger
+    int   retCount      = 0;       // remaining retrig events
+    int   retPeriodSamples = 0;    // samples between retrigs
+    int   retPhase      = 0;       // samples since last retrig
+    int   retVolCurve   = 0;       // 0-9: per-retrig level multiplier (0=flat, 9=-90% each)
 };
 
 // ---------------------------------------------------------------------------
 // Sequencer — sample-accurate row-based playback (ported from tracker/tracker)
 // ---------------------------------------------------------------------------
 
+/// A note scheduled to fire after a DEL (delay) FX offset within a row.
+struct DelayedNote {
+    int instrIdx       = -1;
+    int midiNote       = -1;
+    int vol            = 80;
+    int trackIdx       = 0;
+    int32_t samplesRemaining = 0;   // counts down per buffer; fires when <= 0
+    // Non-DEL FX slots forwarded to triggerNote (up to 2 remaining after removing DEL)
+    int fx0cmd = 0, fx0val = 0;
+    int fx1cmd = 0, fx1val = 0;
+};
+
 /// One pre-built row ready for native playback.
-/// noteData: packed as groups of 3 ints per track:
-///   [instrumentIdx, midiNote, volume_0_99]
-///   instrumentIdx = -1  → silence/no change for that track
-///   midiNote      = -1  → no note (keep previous)
-///   midiNote      = -2  → note off
+/// noteData: packed as groups of 9 ints per track:
+///   [instrIdx, midiNote, vol, fx0cmd, fx0val, fx1cmd, fx1val, fx2cmd, fx2val]
+///   instrIdx  = -1  → silence/no change for that track
+///   midiNote  = -1  → no note (keep previous)
+///   midiNote  = -2  → note off
 struct QueuedRow {
     int32_t lineSamples = 0;      // how many audio frames this row lasts
     std::vector<int> noteData;    // track note events (groups of 3)
@@ -142,6 +186,17 @@ public:
     // Per-track send levels (8 tracks, all 0..1)
     void setTrackSends(int trackIdx, float rev, float del, float cho);
 
+    // Per-instrument send levels (0..1); stacked on top of track sends
+    void setInstrumentSends(int instrIdx, float rev, float del, float cho);
+
+    // Per-instrument HP/LP filter (0..1 norm; hpNorm 0=bypass, lpNorm 1=bypass)
+    void setInstrumentFilters(int instrIdx, float hpNorm, float lpNorm);
+
+    // Per-instrument playback params (mirrors SamplerParams: pitch/vol/start/end/atk/rel/loop)
+    void setInstrumentPlaybackParams(int instrIdx, float pitch, float volume,
+                                     float startNorm, float endNorm,
+                                     float attackSec, float releaseSec, int loopMode);
+
     // Per-track peak levels for metering (linear 0..1, with slow decay)
     float getTrackPeak(int t) const { return (t >= 0 && t < 8) ? mTrackPeakLinear[t] : 0.0f; }
 
@@ -186,10 +241,32 @@ private:
     bool                   mSeqLoop         = false;
     std::atomic<int32_t>   mPendingAdvances {0};   // rows advanced since last poll
 
+    // Delayed notes from DEL fx (decremented per buffer, fired when <= 0)
+    std::vector<DelayedNote> mPendingDelays;
+    int32_t mCurrentRowLineSamples = 0;  // lineSamples of the currently playing row
+
     // Per-track send levels (8 tracks)
     float mTrackReverbSend[8] = {};
     float mTrackDelaySend[8]  = {};
     float mTrackChorusSend[8] = {};
+
+    // Per-instrument send levels (kMaxVoices instruments) — atomic for lock-free UI thread writes
+    std::atomic<float> mInstrumentRevSend[kMaxVoices];
+    std::atomic<float> mInstrumentDelSend[kMaxVoices];
+    std::atomic<float> mInstrumentChoSend[kMaxVoices];
+
+    // Per-instrument HP/LP cutoff (0..1 norm) — atomic so UI thread can write without locking
+    std::atomic<float> mInstrumentHpCutoff[kMaxVoices];
+    std::atomic<float> mInstrumentLpCutoff[kMaxVoices];  // initialized to 1.0 in open()
+
+    // Per-instrument playback params (set from Dart sampler window, read in fireRow)
+    std::atomic<float> mInstrumentPitch[kMaxVoices];      // octave offset -1..+1 (stored as SamplerParams.pitch)
+    std::atomic<float> mInstrumentVolume[kMaxVoices];     // base volume 0..1
+    std::atomic<float> mInstrumentStartNorm[kMaxVoices];  // playback start 0..1
+    std::atomic<float> mInstrumentEndNorm[kMaxVoices];    // playback end 0..1
+    std::atomic<float> mInstrumentAttack[kMaxVoices];     // attack time in seconds
+    std::atomic<float> mInstrumentRelease[kMaxVoices];    // release time in seconds
+    std::atomic<int>   mInstrumentLoopMode[kMaxVoices];   // 0=OFF,1=LOOP,2=PING
 
     // Per-track peak levels for VU meters (linear 0..1, audio-thread write / JNI read)
     float mTrackPeakLinear[8] = {};
@@ -205,11 +282,18 @@ private:
     // Master effects (created on open, uses mSampleRate)
     std::unique_ptr<class MasterFX> mMasterFX;
 
-    // Fire note events for a given row
+    // Fire note events for a given row (stride-9 noteData)
     void fireRow(const QueuedRow& row);
 
+    // Trigger a single note-on immediately, applying all FX slots
+    void triggerNote(int instrIdx, int midiNote, int vol, int trackIdx,
+                     int32_t lineSamples,
+                     int fx0cmd, int fx0val,
+                     int fx1cmd, int fx1val,
+                     int fx2cmd, int fx2val);
+
     // Audio processing helpers
-    float processSample(Voice& voice, const SampleData& sample);
+    float processSample(Voice& voice, const SampleData& sample, float effFrequency);
 
     // WAV file parsing
     bool parseWavMono16(const std::string& path, std::vector<float>& outMono, int32_t& outSampleRate);

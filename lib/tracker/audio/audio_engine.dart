@@ -332,6 +332,82 @@ class NativeAudioEngine {
     }
   }
 
+  static Future<void> setInstrumentSends(
+      int instrIdx, double rev, double del, double cho) async {
+    try {
+      await platform.invokeMethod<void>(
+        'setInstrumentSends',
+        {'instrIdx': instrIdx, 'rev': rev, 'del': del, 'cho': cho},
+      );
+    } catch (e) {
+      print('Error setInstrumentSends: $e');
+    }
+  }
+
+  // Coalesce rapid filter updates: only one MethodChannel call in-flight at a time.
+  // Calls that arrive while one is pending update the stored value; the do-while
+  // ensures the final value is always flushed after the in-flight call returns.
+  static bool _filterCallInFlight = false;
+  static bool _filterPendingUpdate = false;
+  static int _filterPendingIdx = -1;
+  static double _filterPendingHp = 0.0;
+  static double _filterPendingLp = 1.0;
+
+  static Future<void> setInstrumentFilters(
+      int instrIdx, double hpNorm, double lpNorm) async {
+    _filterPendingIdx = instrIdx;
+    _filterPendingHp = hpNorm;
+    _filterPendingLp = lpNorm;
+    if (_filterCallInFlight) {
+      _filterPendingUpdate = true;
+      return;
+    }
+    do {
+      _filterPendingUpdate = false;
+      _filterCallInFlight = true;
+      try {
+        await platform.invokeMethod<void>(
+          'setInstrumentFilters',
+          {
+            'instrIdx': _filterPendingIdx,
+            'hpNorm': _filterPendingHp,
+            'lpNorm': _filterPendingLp,
+          },
+        );
+      } catch (e) {
+        print('Error setInstrumentFilters: $e');
+      }
+      _filterCallInFlight = false;
+    } while (_filterPendingUpdate);
+  }
+
+  /// Push all per-instrument sampler playback params to the native engine.
+  /// fireRow() uses these so phrase playback matches the sampler preview exactly.
+  /// [pitch]: SamplerParams.pitch — octave offset -1..+1 (-12..+12 semitones)
+  /// [attackSec] / [releaseSec]: already in seconds (multiply by 0.5 on the call site)
+  static Future<void> setInstrumentPlaybackParams(
+      int instrIdx, double pitch, double volume,
+      double startNorm, double endNorm,
+      double attackSec, double releaseSec, int loopMode) async {
+    try {
+      await platform.invokeMethod<void>(
+        'setInstrumentPlaybackParams',
+        {
+          'instrIdx': instrIdx,
+          'pitch': pitch,
+          'volume': volume,
+          'startNorm': startNorm,
+          'endNorm': endNorm,
+          'attackSec': attackSec,
+          'releaseSec': releaseSec,
+          'loopMode': loopMode,
+        },
+      );
+    } catch (e) {
+      print('Error setInstrumentPlaybackParams: $e');
+    }
+  }
+
   // === Master chain: EQ-5 → HP → LP → Limiter → Volume ===
 
   /// Set one of the 5 master EQ bands (band 0-4, dBgain -12..+12)
