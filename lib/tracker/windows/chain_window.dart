@@ -91,6 +91,7 @@ class ChainWindow extends StatelessWidget {
                     child: Row(children: [
                     // Row number — tap to select/extend line selection
                     GestureDetector(
+                      behavior: HitTestBehavior.opaque,
                       onTap: () {
                         model.selectLine(row);
                         onStateChange();
@@ -114,6 +115,7 @@ class ChainWindow extends StatelessWidget {
                       if (isCursor && text == '--') text = '00';
 
                       return GestureDetector(
+                        behavior: HitTestBehavior.opaque,
                         onTap: () {
                           model.clearLineSelection();
                           model.cursorRow = row;

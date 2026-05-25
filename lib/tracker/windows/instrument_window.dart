@@ -133,7 +133,7 @@ class _InstrumentWindowState extends State<InstrumentWindow> {
         // Fixed button width
         const btnW = 42.0;
         const btnSpacing = 5.0;
-        final waveformW = constraints.maxWidth - _rowNumW - (btnW + btnSpacing) * 4;
+        final waveformW = constraints.maxWidth - _rowNumW - (btnW + btnSpacing) * 3 - btnSpacing;
         
         // Font sizing based on row height, matching other windows
         final fontSize = (_rowH * 0.6).clamp(16.0, 28.0);
@@ -166,6 +166,7 @@ class _InstrumentWindowState extends State<InstrumentWindow> {
                       ),
                       // LOAD button
                       GestureDetector(
+                        behavior: HitTestBehavior.opaque,
                         onTap: () async {
                           model.cursorRow = row;
                           model.cursorCol = 0;
@@ -207,6 +208,7 @@ class _InstrumentWindowState extends State<InstrumentWindow> {
                       ),
                       // EDIT button
                       GestureDetector(
+                        behavior: HitTestBehavior.opaque,
                         onTap: () {
                           // Only open sampler if a sample is loaded
                           if (inst.sample.isNotEmpty) {
@@ -231,6 +233,7 @@ class _InstrumentWindowState extends State<InstrumentWindow> {
                       ),
                       // REC button
                       GestureDetector(
+                        behavior: HitTestBehavior.opaque,
                         onTap: () {
                           // TODO: Recording functionality
                           model.cursorRow = row;
@@ -251,42 +254,35 @@ class _InstrumentWindowState extends State<InstrumentWindow> {
                           ),
                         ),
                       ),
-                      // Waveform display area
-                      Container(
-                        width: waveformW,
-                        margin: EdgeInsets.symmetric(horizontal: btnSpacing / 2),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.white, width: 1.5),
-                          color: const Color(0xFF0a0a0a),
-                        ),
-                        alignment: Alignment.center,
-                        child: Text(
-                          hasSample ? model.getSampleDisplayName(row) : 'empty',
-                          style: hasSample
-                              ? trackerStyle(size: fontSize, color: kGreen)
-                              : trackerStyle(size: fontSize, color: Colors.grey),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                      // Delete button (X)
+                      // Waveform display area — tap to preview, long-press to clear sample
                       GestureDetector(
-                        onTap: () {
-                          // Delete sample
-                          model.instruments[row].sample = '';
-                          onStateChange();
-                        },
+                        behavior: HitTestBehavior.opaque,
+                        onTap: hasSample
+                            ? () async {
+                                await NativeAudioEngine.noteOn(row, 261.626, 0.8);
+                              }
+                            : null,
+                        onLongPress: hasSample
+                            ? () {
+                                model.instruments[row].sample = '';
+                                onStateChange();
+                              }
+                            : null,
                         child: Container(
-                          width: btnW,
+                          width: waveformW,
                           margin: EdgeInsets.symmetric(horizontal: btnSpacing / 2),
                           decoration: BoxDecoration(
                             border: Border.all(color: Colors.white, width: 1.5),
+                            color: const Color(0xFF0a0a0a),
                           ),
                           alignment: Alignment.center,
                           child: Text(
-                            'X',
-                            style: ts,
+                            hasSample ? model.getSampleDisplayName(row) : 'empty',
+                            style: hasSample
+                                ? trackerStyle(size: fontSize, color: kGreen)
+                                : trackerStyle(size: fontSize, color: Colors.grey),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             textAlign: TextAlign.center,
                           ),
                         ),

@@ -79,12 +79,49 @@ class MixerChannel {
   int chorusSend = 0;
 }
 
+class MasterFx {
+  // Reverb (Freeverb)
+  double reverbSize  = 0.5;  // room size 0–1
+  double reverbDamp  = 0.5;  // damping   0–1
+  double reverbWidth = 1.0;  // stereo width 0–1
+  // Delay
+  double delayTimeL    = 4.0;   // lines (1–16)
+  double delayTimeR    = 4.0;   // lines (1–16)
+  double delayFeedback = 0.4;   // 0–1
+
+  // Chorus
+  double chorusRate  = 1.0;  // Hz   (0.1–5)
+  double chorusDepth = 0.5;  // 0–1
+
+  // 5-band master EQ gains in dB (−12 … +12)
+  double eqBand1 = 0.0;  //  80 Hz  (low shelf)
+  double eqBand2 = 0.0;  // 250 Hz
+  double eqBand3 = 0.0;  //   1 kHz (mid)
+  double eqBand4 = 0.0;  //   4 kHz
+  double eqBand5 = 0.0;  //  12 kHz (high shelf)
+
+  // High-pass filter
+  double hpFreq = 20.0;   // Hz  (20–1000)
+  double hpRes  = 0.5;    // resonance 0–1
+
+  // Low-pass filter
+  double lpFreq = 20000.0; // Hz  (1000–20000)
+  double lpRes  = 0.5;     // resonance 0–1
+
+  // Master limiter threshold in dB (−24 … 0; 0 = ceiling only)
+  double limiterThreshold = 0.0;
+
+  // Master output volume (0–1)
+  double masterVolume = 0.8;
+}
+
 class TrackerModel {
   Song song = Song();
   List<Chain> chains = List.generate(99, (_) => Chain());
   List<Phrase> phrases = List.generate(99, (_) => Phrase());
   List<Instrument> instruments = List.generate(99, (_) => Instrument());
   List<MixerChannel> mixerChannels = List.generate(8, (_) => MixerChannel());
+  MasterFx masterFx = MasterFx();
 
   // Playback state
   bool isPlaying = false;

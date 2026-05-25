@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/gestures.dart';
@@ -22,7 +23,7 @@ class TrackerScreen extends StatefulWidget {
   State<TrackerScreen> createState() => _TrackerScreenState();
 }
 
-class _TrackerScreenState extends State<TrackerScreen> {
+class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserver {
   late TrackerModel model;
   final List<String> windowNames = ['S', 'C', 'P', 'I', 'M'];
   int _samplerInstrumentOpen = -1;  // -1 = no sampler open, >=0 = instrument index
@@ -34,17 +35,43 @@ class _TrackerScreenState extends State<TrackerScreen> {
   int _currentStepIndex    = 0;   // current position in C++ queue
   bool _playingPhraseMode  = false; // true when playing from Phrase window
   int _phraseLen           = 0;   // step count for phrase-mode loop wrap
+  Timer? _autoSaveTimer;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     model = widget.initialModel ?? TrackerModel();
+    // Autosave every 60 seconds
+    _autoSaveTimer = Timer.periodic(
+      const Duration(seconds: 60),
+      (_) => _autoSave(),
+    );
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _autoSaveTimer?.cancel();
     _stepTimer?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Save when the app is backgrounded or the process is about to be killed
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _autoSave();
+    }
+  }
+
+  Future<void> _autoSave() async {
+    try {
+      await ProjectManager.saveProject(ProjectManager.autoSaveName, model);
+    } catch (e) {
+      debugPrint('Autosave failed: $e');
+    }
   }
 
   void _startPollTimer() {
@@ -149,6 +176,7 @@ class _TrackerScreenState extends State<TrackerScreen> {
     }
 
     // ── Always allowed: Song, Instrument, Mixer ──────────────────────────
+    _samplerInstrumentOpen = -1; // close sampler when switching windows
     model.currentWindow = windowIndex;
 
     if (windowIndex == 0) {
@@ -282,6 +310,7 @@ class _TrackerScreenState extends State<TrackerScreen> {
                             }
                             final buttonIndex = i ~/ 2;
                             return GestureDetector(
+                              behavior: HitTestBehavior.opaque,
                               onTap: () {
                                 setState(() {
                                   _navigateToWindow(buttonIndex);
@@ -624,19 +653,146 @@ class _TrackerScreenState extends State<TrackerScreen> {
         break;
 
       case 'LOAD SONG':
-        // TODO: Load song
-        print('Load song clicked');
+        _showLoadSongDialog();
         break;
 
       case 'SET TEMPO':
-        // TODO: Set tempo dialog
-        print('Set tempo clicked');
+        _showSetTempoDialog();
         break;
 
       case 'FOLDER':
         // TODO: Browse projects folder
         print('Folder clicked');
         break;
+    }
+  }
+
+  Future<void> _showLoadSongDialog() async {
+    final projects = await ProjectManager.listProjects();
+    if (!mounted) return;
+
+    if (projects.isEmpty) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: Colors.black87,
+          title: Text('Load Song', style: trackerStyle(size: 16)),
+          content: Text('No saved projects found.', style: trackerStyle(size: 13)),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+          ],
+        ),
+      );
+      return;
+    }
+
+    // Newest first
+    projects.sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
+
+    final selectedDir = await showDialog<Directory>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.black87,
+        title: Text('Load Song', style: trackerStyle(size: 16)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: projects.length,
+            itemBuilder: (_, i) {
+              final name = ProjectManager.getProjectName(projects[i]);
+              return ListTile(
+                title: Text(name, style: trackerStyle(size: 14, color: kGreen)),
+                onTap: () => Navigator.pop(ctx, projects[i]),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+
+    if (selectedDir == null || !mounted) return;
+
+    final loadedModel = await ProjectManager.loadProject(selectedDir);
+    if (loadedModel == null || !mounted) return;
+
+    // Stop any active playback before replacing model
+    if (model.isPlaying) {
+      model.stopPlayback();
+      await NativeAudioEngine.clearQueue();
+      await NativeAudioEngine.stopAll();
+      _stepTimer?.cancel();
+      _stepTimer = null;
+    }
+
+    // Push all samples to C++ engine
+    for (int i = 0; i < loadedModel.instruments.length; i++) {
+      final samplePath = loadedModel.instruments[i].sample;
+      if (samplePath.isNotEmpty) {
+        await NativeAudioEngine.loadSample(i, samplePath);
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      model = loadedModel;
+      _samplerInstrumentOpen = -1;
+      _currentStepIndex = 0;
+      _songRowMap = [];
+      _chainRowMap = [];
+      _phraseLen = 0;
+    });
+  }
+
+  Future<void> _showSetTempoDialog() async {
+    String bpmText = model.song.bpm.toString();
+    final result = await showDialog<int>(
+      context: context,
+      builder: (ctx) {
+        final ctrl = TextEditingController(text: bpmText);
+        return AlertDialog(
+          backgroundColor: Colors.black87,
+          title: Text('Set Tempo', style: trackerStyle(size: 16)),
+          content: TextField(
+            autofocus: true,
+            keyboardType: TextInputType.number,
+            controller: ctrl,
+            style: trackerStyle(size: 14, color: kGreen),
+            decoration: const InputDecoration(
+              hintText: '60 – 300',
+              border: OutlineInputBorder(),
+              suffixText: 'BPM',
+            ),
+            onChanged: (v) => bpmText = v,
+            onSubmitted: (v) {
+              final bpm = int.tryParse(v);
+              if (bpm != null) Navigator.pop(ctx, bpm.clamp(60, 300));
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                final bpm = int.tryParse(bpmText);
+                if (bpm != null) Navigator.pop(ctx, bpm.clamp(60, 300));
+              },
+              child: const Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
+    if (result != null) {
+      setState(() => model.song.bpm = result);
     }
   }
 

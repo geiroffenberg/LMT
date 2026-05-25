@@ -70,6 +70,7 @@ class SongWindow extends StatelessWidget {
                         child: Row(
                           children: [
                             GestureDetector(
+                              behavior: HitTestBehavior.opaque,
                               onTap: () {
                                 model.selectLine(rowIndex);
                                 onStateChange();
@@ -93,6 +94,7 @@ class SongWindow extends StatelessWidget {
                                 text = chainRef == 0 ? '00' : chainRef.toString().padLeft(2, '0');
                               }
                               return GestureDetector(
+                                behavior: HitTestBehavior.opaque,
                                 onTap: () {
                                   model.clearLineSelection();
                                   model.cursorRow = rowIndex;

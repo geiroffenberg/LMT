@@ -9,6 +9,8 @@ import 'storage_service.dart';
 class ProjectManager {
   static const String songFileName = 'song.lmt';
   static const String samplesFolder = 'samples';
+  /// Reserved name for the auto-save slot — hidden from the user project list.
+  static const String autoSaveName = '__AUTOSAVE__';
 
   /// Get the latest project folder, or null if no projects exist
   static Future<Directory?> getLatestProject() async {
@@ -22,7 +24,8 @@ class ProjectManager {
       final entries = projectsDir.listSync();
       final folders = entries
           .whereType<Directory>()
-          .where((d) => !d.path.endsWith('.')) // Skip hidden folders
+          .where((d) => !d.path.endsWith('.'))
+          .where((d) => path_lib.basename(d.path) != autoSaveName) // Skip autosave slot
           .toList();
 
       if (folders.isEmpty) {
@@ -166,6 +169,7 @@ class ProjectManager {
       return entries
           .whereType<Directory>()
           .where((d) => !d.path.endsWith('.'))
+          .where((d) => path_lib.basename(d.path) != autoSaveName) // Hide autosave slot
           .toList();
     } catch (e) {
       print('Error listing projects: $e');
@@ -186,6 +190,7 @@ class ProjectManager {
     return {
       'version': 1,
       'created': DateTime.now().toIso8601String(),
+      'projectName': model.currentProjectName,
       'bpm': model.song.bpm,
       'chains': [
         for (int i = 0; i < model.song.chains.length; i++)
@@ -347,7 +352,15 @@ class ProjectManager {
       }
     }
 
-    // Update project path in model
+    // Restore project name: prefer the name stored inside the JSON (so autosave
+    // shows the real project name, not '__AUTOSAVE__').
+    final storedName = json['projectName'] as String?;
+    if (storedName != null && storedName.isNotEmpty && storedName != autoSaveName) {
+      model.currentProjectName = storedName;
+    } else if (projectDir != null) {
+      final dirName = path_lib.basename(projectDir.path);
+      if (dirName != autoSaveName) model.currentProjectName = dirName;
+    }
     if (projectDir != null) {
       model.currentProjectPath = projectDir.path;
     }

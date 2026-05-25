@@ -714,6 +714,7 @@ class _SamplerWindowState extends State<SamplerWindow> {
                         children: [
                           Expanded(
                             child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
                               onTap: _isCropping ? null : _cropSample,
                               child: Container(
                                 decoration: BoxDecoration(
@@ -734,6 +735,7 @@ class _SamplerWindowState extends State<SamplerWindow> {
                           ),
                           Expanded(
                             child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
                               onTap: _isChopping ? null : _chopSample,
                               child: Container(
                                 alignment: Alignment.center,

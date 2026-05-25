@@ -263,9 +263,25 @@ class SampleBrowser {
                                   ),
                                 ),
                               for (final samplePath in samples)
-                                ListTile(
+                                Builder(builder: (context) {
+                                  Future<void> togglePreview() async {
+                                    if (previewingSample == samplePath) {
+                                      await NativeAudioEngine.noteOff(previewSlot);
+                                      setSheetState(() => previewingSample = null);
+                                    } else {
+                                      if (previewingSample != null) {
+                                        await NativeAudioEngine.noteOff(previewSlot);
+                                      }
+                                      final loaded = await NativeAudioEngine.loadSample(previewSlot, samplePath);
+                                      if (loaded) {
+                                        await NativeAudioEngine.noteOn(previewSlot, 261.626, 0.8);
+                                        setSheetState(() => previewingSample = samplePath);
+                                      }
+                                    }
+                                  }
+                                  return ListTile(
                                   dense: false,
-                                  onTap: null,
+                                  onTap: togglePreview,
                                   leading: IconButton(
                                     icon: Icon(
                                       previewingSample == samplePath
@@ -275,28 +291,7 @@ class SampleBrowser {
                                           ? kGreen
                                           : Colors.white70,
                                     ),
-                                    onPressed: () async {
-                                      if (previewingSample == samplePath) {
-                                        // Stop playback
-                                        await NativeAudioEngine.noteOff(previewSlot);
-                                        setSheetState(() {
-                                          previewingSample = null;
-                                        });
-                                      } else {
-                                        // Stop any current preview first
-                                        if (previewingSample != null) {
-                                          await NativeAudioEngine.noteOff(previewSlot);
-                                        }
-                                        // Load and play
-                                        final loaded = await NativeAudioEngine.loadSample(previewSlot, samplePath);
-                                        if (loaded) {
-                                          await NativeAudioEngine.noteOn(previewSlot, 261.626, 0.8);
-                                          setSheetState(() {
-                                            previewingSample = samplePath;
-                                          });
-                                        }
-                                      }
-                                    },
+                                    onPressed: togglePreview,
                                   ),
                                   title: Text(
                                     _sampleDisplayName(samplePath),
@@ -323,7 +318,8 @@ class SampleBrowser {
                                       ),
                                     ),
                                   ),
-                                ),
+                                  );
+                                }),
                             ],
                           );
                         },

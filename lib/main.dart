@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'tracker/tracker_screen.dart';
@@ -17,31 +18,55 @@ void main() async {
   final storageInitialized = await StorageService.initializeStorage();
   print('Storage initialization result: $storageInitialized');
   
-  // Load latest project or create new one
+  // Determine which project to load:
+  //   - If __AUTOSAVE__ is newer than the last explicit save → restore unsaved changes
+  //   - Otherwise load the latest explicitly saved project
   TrackerModel? model;
-  final latestProject = await ProjectManager.getLatestProject();
-  
-  if (latestProject != null) {
-    print('Loading latest project: ${ProjectManager.getProjectName(latestProject)}');
-    model = await ProjectManager.loadProject(latestProject);
-    if (model != null) {
-      model.setCurrentProject(
-        ProjectManager.getProjectName(latestProject),
-        latestProject.path,
-      );
+  final projectsDir = await StorageService.getProjectsFolder();
+  Directory? projectToLoad;
+
+  if (projectsDir != null) {
+    final autoSaveDir = Directory(
+        '${projectsDir.path}/${ProjectManager.autoSaveName}');
+    final latestRegular = await ProjectManager.getLatestProject();
+
+    final autoSaveExists = await autoSaveDir.exists();
+    if (autoSaveExists && latestRegular != null) {
+      final autoMod     = autoSaveDir.statSync().modified;
+      final regularMod  = latestRegular.statSync().modified;
+      projectToLoad = autoMod.isAfter(regularMod) ? autoSaveDir : latestRegular;
+    } else if (autoSaveExists) {
+      projectToLoad = autoSaveDir;
+    } else if (latestRegular != null) {
+      projectToLoad = latestRegular;
     }
-  } else {
-    print('No projects found, creating new UNTITLED project');
+  }
+
+  if (projectToLoad != null) {
+    print('Loading project: ${projectToLoad.path}');
+    model = await ProjectManager.loadProject(projectToLoad);
+  }
+
+  if (model == null) {
+    print('No project to load — creating blank UNTITLED');
     final untitledDir = await ProjectManager.createProject('UNTITLED');
+    model = TrackerModel();
     if (untitledDir != null) {
-      model = TrackerModel();
       model.setCurrentProject('UNTITLED', untitledDir.path);
     }
   }
-  
+
   // Initialize native audio engine
   await NativeAudioEngine.initialize();
-  
+
+  // Push all samples to the C++ engine (engine resets on every app start)
+  for (int i = 0; i < model.instruments.length; i++) {
+    final samplePath = model.instruments[i].sample;
+    if (samplePath.isNotEmpty) {
+      await NativeAudioEngine.loadSample(i, samplePath);
+    }
+  }
+
   runApp(LMTApp(initialModel: model));
 }
 

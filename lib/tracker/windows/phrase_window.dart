@@ -66,6 +66,7 @@ class PhraseWindow extends StatelessWidget {
                         color: rowColor,
                         child: Row(children: [
                         GestureDetector(
+                          behavior: HitTestBehavior.opaque,
                           onTap: () {
                             model.selectLine(row);
                             onStateChange();
@@ -115,6 +116,7 @@ class PhraseWindow extends StatelessWidget {
                           }
                           
                           return GestureDetector(
+                            behavior: HitTestBehavior.opaque,
                             onTap: () {
                               model.clearLineSelection();
                               model.cursorRow = row;
