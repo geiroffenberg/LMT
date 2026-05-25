@@ -11,6 +11,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_library(lmt_audio SHARED
     audio/audio_engine.cpp
     audio/jni_bridge.cpp
+    freeverb.cpp
 )
 
 target_include_directories(lmt_audio PRIVATE

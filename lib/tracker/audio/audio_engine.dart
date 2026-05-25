@@ -230,4 +230,186 @@ class NativeAudioEngine {
       print('Error clearQueue: $e');
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Master Effects API
+  // ---------------------------------------------------------------------------
+
+  /// Set reverb room size (0..1)
+  static Future<void> setReverbSize(double norm) async {
+    try {
+      await platform.invokeMethod<void>(
+        'setReverbSize',
+        {'norm': norm},
+      );
+    } catch (e) {
+      print('Error setReverbSize: $e');
+    }
+  }
+
+  /// Set reverb damping (0..1)
+  static Future<void> setReverbDamping(double norm) async {
+    try {
+      await platform.invokeMethod<void>(
+        'setReverbDamping',
+        {'norm': norm},
+      );
+    } catch (e) {
+      print('Error setReverbDamping: $e');
+    }
+  }
+
+  /// Set reverb width (0..1)
+  static Future<void> setReverbWidth(double norm) async {
+    try {
+      await platform.invokeMethod<void>(
+        'setReverbWidth',
+        {'norm': norm},
+      );
+    } catch (e) {
+      print('Error setReverbWidth: $e');
+    }
+  }
+
+  /// Set delay time (0..1 → ~10..2000 ms)
+  static Future<void> setDelayTime(double norm) async {
+    try {
+      await platform.invokeMethod<void>(
+        'setDelayTime',
+        {'norm': norm},
+      );
+    } catch (e) {
+      print('Error setDelayTime: $e');
+    }
+  }
+
+  /// Set delay feedback (0..1)
+  static Future<void> setDelayFeedback(double norm) async {
+    try {
+      await platform.invokeMethod<void>(
+        'setDelayFeedback',
+        {'norm': norm},
+      );
+    } catch (e) {
+      print('Error setDelayFeedback: $e');
+    }
+  }
+
+  /// Set chorus rate (0..1 → ~0.1..8 Hz)
+  static Future<void> setChorusRate(double norm) async {
+    try {
+      await platform.invokeMethod<void>(
+        'setChorusRate',
+        {'norm': norm},
+      );
+    } catch (e) {
+      print('Error setChorusRate: $e');
+    }
+  }
+
+  /// Set chorus depth (0..1 → ~0..15 ms)
+  static Future<void> setChorusDepth(double norm) async {
+    try {
+      await platform.invokeMethod<void>(
+        'setChorusDepth',
+        {'norm': norm},
+      );
+    } catch (e) {
+      print('Error setChorusDepth: $e');
+    }
+  }
+
+  /// Set per-track effect send levels (trackIdx 0-7, all 0..1 normalized)
+  static Future<void> setTrackSends(
+      int trackIdx, double rev, double del, double cho) async {
+    try {
+      await platform.invokeMethod<void>(
+        'setTrackSends',
+        {'trackIdx': trackIdx, 'rev': rev, 'del': del, 'cho': cho},
+      );
+    } catch (e) {
+      print('Error setTrackSends: $e');
+    }
+  }
+
+  // === Master chain: EQ-5 → HP → LP → Limiter → Volume ===
+
+  /// Set one of the 5 master EQ bands (band 0-4, dBgain -12..+12)
+  static Future<void> setEqBand(int band, double dBgain) async {
+    try {
+      await platform.invokeMethod<void>('setEqBand', {'band': band, 'dBgain': dBgain});
+    } catch (e) {
+      print('Error setEqBand: $e');
+    }
+  }
+
+  static Future<void> setHpFreq(double hz) async {
+    try {
+      await platform.invokeMethod<void>('setHpFreq', {'hz': hz});
+    } catch (e) {
+      print('Error setHpFreq: $e');
+    }
+  }
+
+  static Future<void> setHpRes(double norm) async {
+    try {
+      await platform.invokeMethod<void>('setHpRes', {'norm': norm});
+    } catch (e) {
+      print('Error setHpRes: $e');
+    }
+  }
+
+  static Future<void> setLpFreq(double hz) async {
+    try {
+      await platform.invokeMethod<void>('setLpFreq', {'hz': hz});
+    } catch (e) {
+      print('Error setLpFreq: $e');
+    }
+  }
+
+  static Future<void> setLpRes(double norm) async {
+    try {
+      await platform.invokeMethod<void>('setLpRes', {'norm': norm});
+    } catch (e) {
+      print('Error setLpRes: $e');
+    }
+  }
+
+  static Future<void> setLimiterThreshold(double dB) async {
+    try {
+      await platform.invokeMethod<void>('setLimiterThreshold', {'dB': dB});
+    } catch (e) {
+      print('Error setLimiterThreshold: $e');
+    }
+  }
+
+  static Future<void> setMasterVolume(double norm) async {
+    try {
+      await platform.invokeMethod<void>('setMasterVolume', {'norm': norm});
+    } catch (e) {
+      print('Error setMasterVolume: $e');
+    }
+  }
+
+  static Future<List<double>> getTrackPeaks() async {
+    try {
+      final List<dynamic>? raw = await platform.invokeMethod<List<dynamic>>('getTrackPeaks');
+      if (raw != null) {
+        return raw.map((v) => (v as num).toDouble().clamp(0.0, 1.0)).toList();
+      }
+    } catch (e) {
+      print('Error getTrackPeaks: $e');
+    }
+    return List.filled(8, 0.0);
+  }
+
+  static Future<double> getMasterPeak() async {
+    try {
+      final dynamic raw = await platform.invokeMethod('getMasterPeak');
+      if (raw != null) return (raw as num).toDouble().clamp(0.0, 1.0);
+    } catch (e) {
+      print('Error getMasterPeak: $e');
+    }
+    return 0.0;
+  }
 }

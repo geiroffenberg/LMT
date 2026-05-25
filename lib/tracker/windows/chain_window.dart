@@ -112,21 +112,38 @@ class ChainWindow extends StatelessWidget {
                     ...List.generate(_numCols, (col) {
                       final isCursor = isRowCursor && model.cursorCol == col;
                       String text = cellText(col);
-                      if (isCursor && text == '--') text = '00';
+                      // PH column: keep '--' for empty even when cursor is on it;
+                      // other columns keep the '00' convention.
+                      if (col != 0 && isCursor && text == '--') text = '00';
+
+                      // Cyan tint on PH column when the referenced phrase has note data
+                      final bool phraseHasData = col == 0 &&
+                          item.phrase > 0 &&
+                          model.phrases[item.phrase - 1].steps
+                              .any((s) => s.note != PhraseStep.noteNone);
+                      final cellStyle = phraseHasData
+                          ? trackerStyle(size: fontSize, color: kCyan)
+                          : ts;
 
                       return GestureDetector(
                         behavior: HitTestBehavior.opaque,
                         onTap: () {
+                          final isDouble = col == 0
+                              ? model.isDoubleClick(row, col, 1)
+                              : false;
                           model.clearLineSelection();
                           model.cursorRow = row;
                           model.cursorCol = col;
-                          // Tapping the PH column updates activePhraseIdx
-                          if (col == 0) {
-                            final phraseRef =
-                                model.chains[model.activeChainIdx].items[row].phrase;
-                            if (phraseRef > 0) {
-                              model.activePhraseIdx = phraseRef - 1;
+                          // PH column: double-tap empty cell → first available phrase
+                          if (col == 0 && isDouble && item.phrase == 0) {
+                            final phraseNum = model.firstAvailablePhrase();
+                            if (phraseNum > 0) {
+                              model.chains[model.activeChainIdx].items[row].phrase = phraseNum;
+                              model.activePhraseIdx = phraseNum - 1;
                             }
+                          } else if (col == 0 && item.phrase > 0) {
+                            // Single tap on filled PH cell: update activePhraseIdx
+                            model.activePhraseIdx = item.phrase - 1;
                           }
                           model.enterEditMode();
                           model.editMenuVisible = true;
@@ -141,7 +158,7 @@ class ChainWindow extends StatelessWidget {
                                 : null,
                           ),
                           alignment: Alignment.center,
-                          child: Text(text, style: ts),
+                          child: Text(text, style: cellStyle),
                         ),
                       );
                     }),

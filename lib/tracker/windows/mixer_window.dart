@@ -1,4 +1,6 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import '../audio/audio_engine.dart';
 import '../tracker_model.dart';
 import '../tracker_styles.dart';
 import 'fx_window.dart';
@@ -55,7 +57,7 @@ class _MixerWindowState extends State<MixerWindow> {
             behavior: HitTestBehavior.opaque,
             onHorizontalDragUpdate: (details) {
               final width = MediaQuery.of(context).size.width - 80;
-              final newValue = (value + details.delta.dx / width).clamp(min, max);
+              final newValue = (value + details.delta.dx / width * (max - min)).clamp(min, max);
               setState(() => onChanged(newValue));
               widget.onStateChange();
             },
@@ -190,35 +192,102 @@ class _MixerWindowState extends State<MixerWindow> {
             // ── Master EQ ─────────────────────────────────────────────────
             _sectionLabel('MASTER EQ', fontSize),
             _paramRow('80Hz',  fx.eqBand1, -12, 12, _db(fx.eqBand1),
-                (v) => fx.eqBand1 = v, fontSize, ts),
+                (v) { fx.eqBand1 = v; NativeAudioEngine.setEqBand(0, v); }, fontSize, ts),
             _paramRow('250Hz', fx.eqBand2, -12, 12, _db(fx.eqBand2),
-                (v) => fx.eqBand2 = v, fontSize, ts),
+                (v) { fx.eqBand2 = v; NativeAudioEngine.setEqBand(1, v); }, fontSize, ts),
             _paramRow('1kHz',  fx.eqBand3, -12, 12, _db(fx.eqBand3),
-                (v) => fx.eqBand3 = v, fontSize, ts),
+                (v) { fx.eqBand3 = v; NativeAudioEngine.setEqBand(2, v); }, fontSize, ts),
             _paramRow('4kHz',  fx.eqBand4, -12, 12, _db(fx.eqBand4),
-                (v) => fx.eqBand4 = v, fontSize, ts),
+                (v) { fx.eqBand4 = v; NativeAudioEngine.setEqBand(3, v); }, fontSize, ts),
             _paramRow('12kHz', fx.eqBand5, -12, 12, _db(fx.eqBand5),
-                (v) => fx.eqBand5 = v, fontSize, ts),
+                (v) { fx.eqBand5 = v; NativeAudioEngine.setEqBand(4, v); }, fontSize, ts),
 
             // ── HP / LP Filters ───────────────────────────────────────────
             _sectionLabel('FILTER', fontSize),
             _paramRow('HP',  fx.hpFreq, 20, 1000,  _hz(fx.hpFreq),
-                (v) => fx.hpFreq = v, fontSize, ts),
+                (v) { fx.hpFreq = v; NativeAudioEngine.setHpFreq(v); }, fontSize, ts),
             _paramRow('RES', fx.hpRes,   0,    1,  _res(fx.hpRes),
-                (v) => fx.hpRes  = v, fontSize, ts),
+                (v) { fx.hpRes  = v; NativeAudioEngine.setHpRes(v); },  fontSize, ts),
             _paramRow('LP',  fx.lpFreq, 1000, 20000, _hz(fx.lpFreq),
-                (v) => fx.lpFreq = v, fontSize, ts),
+                (v) { fx.lpFreq = v; NativeAudioEngine.setLpFreq(v); }, fontSize, ts),
             _paramRow('RES', fx.lpRes,   0,    1,  _res(fx.lpRes),
-                (v) => fx.lpRes  = v, fontSize, ts),
+                (v) { fx.lpRes  = v; NativeAudioEngine.setLpRes(v); },  fontSize, ts),
 
             // ── Master: limiter + volume ───────────────────────────────────
             _sectionLabel('MASTER', fontSize),
-            _paramRow('LMT', fx.limiterThreshold, -24, 0,
-                _db(fx.limiterThreshold),
-                (v) => fx.limiterThreshold = v, fontSize, ts),
-            _paramRow('VOL', fx.masterVolume, 0, 1,
-                _pct(fx.masterVolume),
-                (v) => fx.masterVolume = v, fontSize, ts),
+            _paramRow('LMT', fx.limiterThreshold, 0, 12,
+                fx.limiterThreshold < 0.05 ? '0dB' : '+${fx.limiterThreshold.toStringAsFixed(1)}dB',
+                (v) { fx.limiterThreshold = v; NativeAudioEngine.setLimiterThreshold(v); }, fontSize, ts),
+
+            // ── VOL row with horizontal master meter overlay ───────────────
+            Builder(builder: (context) {
+              final masterPeak = model.masterPeak;
+              final double dB = masterPeak > 1e-6
+                  ? 20.0 * math.log(masterPeak) / math.ln10
+                  : -60.0;
+              return Container(
+                height: _rowH,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                child: Row(children: [
+                  SizedBox(
+                    width: 60,
+                    child: Text('VOL', style: ts, textAlign: TextAlign.left),
+                  ),
+                  Expanded(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onHorizontalDragUpdate: (details) {
+                        final width = MediaQuery.of(context).size.width - 80;
+                        final nv = (fx.masterVolume + details.delta.dx / width).clamp(0.0, 1.0);
+                        setState(() {
+                          fx.masterVolume = nv;
+                          NativeAudioEngine.setMasterVolume(nv);
+                        });
+                        widget.onStateChange();
+                      },
+                      child: Container(
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.white, width: 1),
+                        ),
+                        child: Stack(children: [
+                          // Horizontal LED meter (background)
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: List.generate(6, (i) {
+                              // i=0 = leftmost block (−30..−25 dB), i=5 = rightmost (−5..0 dB)
+                              final double thresh = -30.0 + i * 5.0;
+                              final bool lit = dB >= thresh;
+                              final bool isHot = i == 5;
+                              return Expanded(
+                                child: Container(
+                                  margin: EdgeInsets.only(right: i < 5 ? 1.0 : 0.0),
+                                  color: lit
+                                      ? (isHot ? const Color(0xFF7A3000) : const Color(0xFF1A5A1A))
+                                      : const Color(0xFF0D0D0D),
+                                ),
+                              );
+                            }),
+                          ),
+                          // Slider dot (foreground)
+                          Align(
+                            alignment: Alignment(2 * fx.masterVolume - 1, 0),
+                            child: Container(width: 8, height: 8, color: Colors.white),
+                          ),
+                        ]),
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 56,
+                    child: Text(
+                      _pct(fx.masterVolume),
+                      style: trackerStyle(size: fontSize, color: kGreen),
+                      textAlign: TextAlign.right,
+                    ),
+                  ),
+                ]),
+              );
+            }),
 
             // ── FX button ─────────────────────────────────────────────────
             _sectionLabel('', fontSize),

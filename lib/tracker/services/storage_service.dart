@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:path_provider/path_provider.dart';
 
 class StorageService {
   static const String projectsFolderName = 'LMT_PROJECTS';

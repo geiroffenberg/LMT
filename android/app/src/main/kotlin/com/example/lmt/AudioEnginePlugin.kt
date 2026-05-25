@@ -119,6 +119,92 @@ class AudioEnginePlugin(private val context: Context) {
                     nativeClearQueue(nativeHandle)
                     result.success(true)
                 }
+                "setReverbSize" -> {
+                    val norm = call.argument<Double>("norm")?.toFloat() ?: 0f
+                    nativeSetReverbSize(nativeHandle, norm)
+                    result.success(true)
+                }
+                "setReverbDamping" -> {
+                    val norm = call.argument<Double>("norm")?.toFloat() ?: 0f
+                    nativeSetReverbDamping(nativeHandle, norm)
+                    result.success(true)
+                }
+                "setReverbWidth" -> {
+                    val norm = call.argument<Double>("norm")?.toFloat() ?: 1f
+                    nativeSetReverbWidth(nativeHandle, norm)
+                    result.success(true)
+                }
+                "setDelayTime" -> {
+                    val norm = call.argument<Double>("norm")?.toFloat() ?: 0f
+                    nativeSetDelayTime(nativeHandle, norm)
+                    result.success(true)
+                }
+                "setDelayFeedback" -> {
+                    val norm = call.argument<Double>("norm")?.toFloat() ?: 0f
+                    nativeSetDelayFeedback(nativeHandle, norm)
+                    result.success(true)
+                }
+                "setChorusRate" -> {
+                    val norm = call.argument<Double>("norm")?.toFloat() ?: 0f
+                    nativeSetChorusRate(nativeHandle, norm)
+                    result.success(true)
+                }
+                "setChorusDepth" -> {
+                    val norm = call.argument<Double>("norm")?.toFloat() ?: 0f
+                    nativeSetChorusDepth(nativeHandle, norm)
+                    result.success(true)
+                }
+                "setTrackSends" -> {
+                    val trackIdx = call.argument<Int>("trackIdx") ?: 0
+                    val rev = call.argument<Double>("rev")?.toFloat() ?: 0f
+                    val del = call.argument<Double>("del")?.toFloat() ?: 0f
+                    val cho = call.argument<Double>("cho")?.toFloat() ?: 0f
+                    nativeSetTrackSends(nativeHandle, trackIdx, rev, del, cho)
+                    result.success(true)
+                }
+                "setEqBand" -> {
+                    val band   = call.argument<Int>("band") ?: 0
+                    val dBgain = call.argument<Double>("dBgain")?.toFloat() ?: 0f
+                    nativeSetEqBand(nativeHandle, band, dBgain)
+                    result.success(true)
+                }
+                "setHpFreq" -> {
+                    val hz = call.argument<Double>("hz")?.toFloat() ?: 20f
+                    nativeSetHpFreq(nativeHandle, hz)
+                    result.success(true)
+                }
+                "setHpRes" -> {
+                    val norm = call.argument<Double>("norm")?.toFloat() ?: 0f
+                    nativeSetHpRes(nativeHandle, norm)
+                    result.success(true)
+                }
+                "setLpFreq" -> {
+                    val hz = call.argument<Double>("hz")?.toFloat() ?: 20000f
+                    nativeSetLpFreq(nativeHandle, hz)
+                    result.success(true)
+                }
+                "setLpRes" -> {
+                    val norm = call.argument<Double>("norm")?.toFloat() ?: 0f
+                    nativeSetLpRes(nativeHandle, norm)
+                    result.success(true)
+                }
+                "setLimiterThreshold" -> {
+                    val dB = call.argument<Double>("dB")?.toFloat() ?: 0f
+                    nativeSetLimiterThreshold(nativeHandle, dB)
+                    result.success(true)
+                }
+                "setMasterVolume" -> {
+                    val norm = call.argument<Double>("norm")?.toFloat() ?: 0.8f
+                    nativeSetMasterVolume(nativeHandle, norm)
+                    result.success(true)
+                }
+                "getTrackPeaks" -> {
+                    val peaks = nativeGetTrackPeaks(nativeHandle)
+                    result.success(peaks.map { it.toDouble() })
+                }
+                "getMasterPeak" -> {
+                    result.success(nativeGetMasterPeak(nativeHandle).toDouble())
+                }
                 else -> result.notImplemented()
             }
         }
@@ -145,4 +231,21 @@ class AudioEnginePlugin(private val context: Context) {
     private external fun nativeEnqueueAllRows(handle: Long, loop: Boolean, rowData: IntArray)
     private external fun nativeConsumeRowAdvances(handle: Long): Int
     private external fun nativeClearQueue(handle: Long)
+    private external fun nativeSetReverbSize(handle: Long, norm: Float)
+    private external fun nativeSetReverbDamping(handle: Long, norm: Float)
+    private external fun nativeSetReverbWidth(handle: Long, norm: Float)
+    private external fun nativeSetDelayTime(handle: Long, norm: Float)
+    private external fun nativeSetDelayFeedback(handle: Long, norm: Float)
+    private external fun nativeSetChorusRate(handle: Long, norm: Float)
+    private external fun nativeSetChorusDepth(handle: Long, norm: Float)
+    private external fun nativeSetTrackSends(handle: Long, trackIdx: Int, rev: Float, del: Float, cho: Float)
+    private external fun nativeSetEqBand(handle: Long, band: Int, dBgain: Float)
+    private external fun nativeSetHpFreq(handle: Long, hz: Float)
+    private external fun nativeSetHpRes(handle: Long, norm: Float)
+    private external fun nativeSetLpFreq(handle: Long, hz: Float)
+    private external fun nativeSetLpRes(handle: Long, norm: Float)
+    private external fun nativeSetLimiterThreshold(handle: Long, dB: Float)
+    private external fun nativeSetMasterVolume(handle: Long, norm: Float)
+    private external fun nativeGetTrackPeaks(handle: Long): FloatArray
+    private external fun nativeGetMasterPeak(handle: Long): Float
 }

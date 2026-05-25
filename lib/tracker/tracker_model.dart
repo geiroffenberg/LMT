@@ -126,7 +126,8 @@ class TrackerModel {
   // Playback state
   bool isPlaying = false;
   bool isLooping = false;
-  List<int> audioLevels = List.filled(8, 0); // 0-100 per channel
+  List<double> audioLevels = List.filled(8, 0.0); // linear peak 0..1 per channel
+  double masterPeak = 0.0;                         // post-limiter master bus peak 0..1
 
   // --- Song playback position ---
   int playheadRow = 0;        // which song row is currently playing
@@ -185,6 +186,28 @@ class TrackerModel {
     return song.chains[row].every((ref) => ref == 0);
   }
 
+  /// Returns the smallest chain number (1-99) whose chain data is completely
+  /// empty (no phrases assigned), or -1 if every chain slot is in use.
+  int firstAvailableChain() {
+    for (int i = 0; i < 99; i++) {
+      if (chains[i].items.every((item) => item.phrase == 0)) {
+        return i + 1;
+      }
+    }
+    return -1;
+  }
+
+  /// Returns the smallest phrase number (1-99) whose phrase data is completely
+  /// empty (all steps have note == noteNone), or -1 if all are in use.
+  int firstAvailablePhrase() {
+    for (int i = 0; i < 99; i++) {
+      if (phrases[i].steps.every((step) => step.note == PhraseStep.noteNone)) {
+        return i + 1;
+      }
+    }
+    return -1;
+  }
+
   /// Call this when PLAY is pressed — initialises playback from cursor row
   void startPlayback() {
     playheadRow = cursorRow;
@@ -214,7 +237,8 @@ class TrackerModel {
     chainPhraseIndex = 0;
     phraseStep = 0;
     masterStepLength = 0;
-    audioLevels = List.filled(8, 0);
+    audioLevels = List.filled(8, 0.0);
+    masterPeak = 0.0;
 
     // Reset UI state
     currentWindow = 0;
@@ -1018,7 +1042,9 @@ class TrackerModel {
       final instrIdx = ps.instrument > 0 ? ps.instrument - 1 : -1;
       // 8 tracks × 3 ints; only track 0 carries the step data
       final noteData = <int>[instrIdx, ps.note, ps.volume];
-      for (int t = 1; t < 8; t++) noteData.addAll([-1, -1, -1]);
+      for (int t = 1; t < 8; t++) {
+        noteData.addAll([-1, -1, -1]);
+      }
       rows.add({'lineSamples': lineSamples, 'noteData': noteData});
     }
 

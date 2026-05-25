@@ -41,6 +41,17 @@ bool AudioEngine::open() {
     LOGD("Oboe stream opened: SR=%d Hz, channels=%d", 
          mSampleRate, mStream->getChannelCount());
 
+    // Initialize master effects
+    mMasterFX = std::make_unique<MasterFX>(mSampleRate);
+
+    // Pre-allocate non-interleaved processing buffers (4096 frames is safe for Oboe)
+    const int maxBufFrames = 4096;
+    mDryL.assign(maxBufFrames, 0.0f);    mDryR.assign(maxBufFrames, 0.0f);
+    mRevSendL.assign(maxBufFrames, 0.0f); mRevSendR.assign(maxBufFrames, 0.0f);
+    mDelSendL.assign(maxBufFrames, 0.0f); mDelSendR.assign(maxBufFrames, 0.0f);
+    mChoSendL.assign(maxBufFrames, 0.0f); mChoSendR.assign(maxBufFrames, 0.0f);
+    mWetL.assign(maxBufFrames, 0.0f);    mWetR.assign(maxBufFrames, 0.0f);
+
     // Initialize voices
     for (int i = 0; i < kMaxVoices; ++i) {
         mVoices[i].instrumentIdx = -1;
@@ -319,6 +330,9 @@ void AudioEngine::fireRow(const QueuedRow& row) {
 
         if (instrIdx < 0 || instrIdx >= kMaxVoices) continue;
 
+        // Track index: each group of 3 ints is one track (clamped to 0-7)
+        const int trackIdx = std::min((i / stride), 7);
+
         if (midiNote == -2) {
             // Note off
             Voice& v = mVoices[instrIdx];
@@ -349,6 +363,11 @@ void AudioEngine::fireRow(const QueuedRow& row) {
             v.envLevel        = 1.0f;
             v.loopMode        = 0;
             v.pingDir         = false;
+            // Per-track send levels
+            v.reverbSend      = mTrackReverbSend[trackIdx];
+            v.delaySend       = mTrackDelaySend[trackIdx];
+            v.chorusSend      = mTrackChorusSend[trackIdx];
+            v.trackIdx        = trackIdx;
             // Short release to avoid clicks
             const float releaseTime = 0.05f;
             v.releaseSamples  = static_cast<int32_t>(releaseTime * mSampleRate);
@@ -397,8 +416,24 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
 
     std::lock_guard<std::mutex> lock(mVoiceMutex);
 
-    // Clear output
-    std::memset(outputData, 0, numFrames * 2 * sizeof(float));
+    // Ensure processing buffers are large enough (resize is rare — only first callback if OS chose large buffer)
+    if (numFrames > static_cast<int32_t>(mDryL.size())) {
+        mDryL.resize(numFrames, 0.0f);    mDryR.resize(numFrames, 0.0f);
+        mRevSendL.resize(numFrames, 0.0f); mRevSendR.resize(numFrames, 0.0f);
+        mDelSendL.resize(numFrames, 0.0f); mDelSendR.resize(numFrames, 0.0f);
+        mChoSendL.resize(numFrames, 0.0f); mChoSendR.resize(numFrames, 0.0f);
+        mWetL.resize(numFrames, 0.0f);    mWetR.resize(numFrames, 0.0f);
+    }
+
+    // Clear all processing buffers
+    std::fill(mDryL.begin(),    mDryL.begin()    + numFrames, 0.0f);
+    std::fill(mDryR.begin(),    mDryR.begin()    + numFrames, 0.0f);
+    std::fill(mRevSendL.begin(),mRevSendL.begin()+ numFrames, 0.0f);
+    std::fill(mRevSendR.begin(),mRevSendR.begin()+ numFrames, 0.0f);
+    std::fill(mDelSendL.begin(),mDelSendL.begin()+ numFrames, 0.0f);
+    std::fill(mDelSendR.begin(),mDelSendR.begin()+ numFrames, 0.0f);
+    std::fill(mChoSendL.begin(),mChoSendL.begin()+ numFrames, 0.0f);
+    std::fill(mChoSendR.begin(),mChoSendR.begin()+ numFrames, 0.0f);
 
     // -------------------------------------------------------------------
     // Sequencer: advance rows sample-accurately
@@ -438,7 +473,10 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
     // Per-sample gain smoothing coefficient (~5ms time constant, same as tracker/tracker)
     const float smoothK = 1.0f - std::exp(-1.0f / (static_cast<float>(mSampleRate) * 0.005f));
 
-    // Process each voice
+    // Per-track peak accumulators for this buffer (filled by voice loop, then decayed into mTrackPeakLinear)
+    float trackPeakWork[8] = {};
+
+    // Process each voice — accumulate into non-interleaved dry + send buffers
     for (int v = 0; v < kMaxVoices; ++v) {
         Voice& voice = mVoices[v];
         if (!voice.isActive && voice.gain < 0.001f) continue;
@@ -446,9 +484,11 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         const SampleData& sample = mSamples[voice.instrumentIdx];
         if (!sample.isLoaded) continue;
 
-        float *outL = outputData;
-        float *outR = outputData + 1;
+        const float revSend = voice.reverbSend;
+        const float delSend = voice.delaySend;
+        const float choSend = voice.chorusSend;
 
+        float voicePeak = 0.0f;
         for (int i = 0; i < numFrames; ++i) {
             // Per-sample exponential gain smoothing — eliminates clicks at buffer edges
             voice.gain += smoothK * (voice.gainTarget - voice.gain);
@@ -490,7 +530,7 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                     // Voice is now inaudible; mark as inactive and skip remaining samples
                     voice.envLevel = 0.0f;
                     voice.isActive = false;
-                    continue;
+                    break;
                 }
                 envelope = voice.envLevel;
             }
@@ -500,20 +540,73 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
 
             // Equal-power stereo pan
             float angle = voice.pan * 1.5707963f; // pan * π/2
-            float panL = std::cos(angle);
-            float panR = std::sin(angle);
+            float sampL = samp * std::cos(angle);
+            float sampR = samp * std::sin(angle);
 
-            *outL += samp * panL;
-            *outR += samp * panR;
+            // Accumulate into dry and effect send buffers
+            mDryL[i] += sampL;
+            mDryR[i] += sampR;
+            mRevSendL[i] += sampL * revSend;
+            mRevSendR[i] += sampR * revSend;
+            mDelSendL[i] += sampL * delSend;
+            mDelSendR[i] += sampR * delSend;
+            mChoSendL[i] += sampL * choSend;
+            mChoSendR[i] += sampR * choSend;
 
-            outL += 2;
-            outR += 2;
+            const float pkSamp = std::max(std::abs(sampL), std::abs(sampR));
+            if (pkSamp > voicePeak) voicePeak = pkSamp;
+        }
+
+        // Contribute this voice's peak to its track meter
+        if (voice.trackIdx >= 0 && voice.trackIdx < 8 && voicePeak > trackPeakWork[voice.trackIdx]) {
+            trackPeakWork[voice.trackIdx] = voicePeak;
         }
 
         // Silence and deactivate fully faded voices
         if (voice.isFadingOut && voice.gain < 0.001f) {
             voice.gain = 0.0f;
             voice.isFadingOut = false;
+        }
+    }
+
+    // Apply per-track peak decay and update meter state
+    {
+        // ~300ms release: peak drops to 0.001 (−60dB) in 300ms
+        const float decayCoeff = std::pow(0.001f, static_cast<float>(numFrames) / (0.3f * mSampleRate));
+        for (int t = 0; t < 8; ++t) {
+            mTrackPeakLinear[t] = std::max(trackPeakWork[t], mTrackPeakLinear[t] * decayCoeff);
+        }
+    }
+
+    // Route through master effects, write interleaved stereo to output
+    if (mMasterFX) {
+        mMasterFX->process(
+            mDryL.data(), mDryR.data(),
+            mRevSendL.data(), mRevSendR.data(),
+            mDelSendL.data(), mDelSendR.data(),
+            mChoSendL.data(), mChoSendR.data(),
+            mWetL.data(), mWetR.data(),
+            numFrames
+        );
+        mMasterFX->postProcess(mWetL.data(), mWetR.data(), numFrames);
+
+        // Capture post-limiter master peak with ~300ms decay
+        float masterBufPeak = 0.0f;
+        for (int i = 0; i < numFrames; ++i) {
+            float pk = std::max(std::abs(mWetL[i]), std::abs(mWetR[i]));
+            if (pk > masterBufPeak) masterBufPeak = pk;
+        }
+        const float masterDecay = std::pow(0.001f, static_cast<float>(numFrames) / (0.3f * mSampleRate));
+        mMasterPeakLinear = std::max(masterBufPeak, mMasterPeakLinear * masterDecay);
+
+        for (int i = 0; i < numFrames; ++i) {
+            outputData[i * 2]     = mWetL[i];
+            outputData[i * 2 + 1] = mWetR[i];
+        }
+    } else {
+        for (int i = 0; i < numFrames; ++i) {
+            outputData[i * 2]     = mDryL[i];
+            outputData[i * 2 + 1] = mDryR[i];
         }
     }
 
@@ -798,6 +891,53 @@ Java_com_example_lmt_AudioEnginePlugin_nativeUpdateStretch(JNIEnv *env, jobject 
 }
 
 // ---------------------------------------------------------------------------
+// Master Effects
+// ---------------------------------------------------------------------------
+
+void AudioEngine::setTrackSends(int trackIdx, float rev, float del, float cho) {
+    if (trackIdx < 0 || trackIdx >= 8) return;
+    mTrackReverbSend[trackIdx] = rev;
+    mTrackDelaySend[trackIdx]  = del;
+    mTrackChorusSend[trackIdx] = cho;
+}
+
+void AudioEngine::setReverbSize(float norm) {
+    if (mMasterFX) mMasterFX->setReverbSize(norm);
+}
+
+void AudioEngine::setReverbDamping(float norm) {
+    if (mMasterFX) mMasterFX->setReverbDamping(norm);
+}
+
+void AudioEngine::setReverbWidth(float norm) {
+    if (mMasterFX) mMasterFX->setReverbWidth(norm);
+}
+
+void AudioEngine::setDelayTime(float norm) {
+    if (mMasterFX) mMasterFX->setDelayTime(norm);
+}
+
+void AudioEngine::setDelayFeedback(float norm) {
+    if (mMasterFX) mMasterFX->setDelayFeedback(norm);
+}
+
+void AudioEngine::setChorusRate(float norm) {
+    if (mMasterFX) mMasterFX->setChorusRate(norm);
+}
+
+void AudioEngine::setEqBand(int band, float dBgain)   { if (mMasterFX) mMasterFX->setEqBand(band, dBgain); }
+void AudioEngine::setHpFreq(float hz)                  { if (mMasterFX) mMasterFX->setHpFreq(hz); }
+void AudioEngine::setHpRes(float norm)                 { if (mMasterFX) mMasterFX->setHpRes(norm); }
+void AudioEngine::setLpFreq(float hz)                  { if (mMasterFX) mMasterFX->setLpFreq(hz); }
+void AudioEngine::setLpRes(float norm)                 { if (mMasterFX) mMasterFX->setLpRes(norm); }
+void AudioEngine::setLimiterThreshold(float dB)        { if (mMasterFX) mMasterFX->setLimiterThreshold(dB); }
+void AudioEngine::setMasterVolume(float norm)          { if (mMasterFX) mMasterFX->setMasterVolume(norm); }
+
+void AudioEngine::setChorusDepth(float norm) {
+    if (mMasterFX) mMasterFX->setChorusDepth(norm);
+}
+
+// ---------------------------------------------------------------------------
 // Sequencer JNI
 // ---------------------------------------------------------------------------
 
@@ -840,6 +980,109 @@ JNIEXPORT void JNICALL
 Java_com_example_lmt_AudioEnginePlugin_nativeClearQueue(JNIEnv *env, jobject obj, jlong handle) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->clearQueue();
+}
+
+// ---------------------------------------------------------------------------
+// Master Effects JNI
+// ---------------------------------------------------------------------------
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetReverbSize(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+    auto* engine = reinterpret_cast<AudioEngine*>(handle);
+    engine->setReverbSize(norm);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetReverbDamping(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+    auto* engine = reinterpret_cast<AudioEngine*>(handle);
+    engine->setReverbDamping(norm);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetReverbWidth(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+    auto* engine = reinterpret_cast<AudioEngine*>(handle);
+    engine->setReverbWidth(norm);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetDelayTime(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+    auto* engine = reinterpret_cast<AudioEngine*>(handle);
+    engine->setDelayTime(norm);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetDelayFeedback(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+    auto* engine = reinterpret_cast<AudioEngine*>(handle);
+    engine->setDelayFeedback(norm);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetChorusRate(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+    auto* engine = reinterpret_cast<AudioEngine*>(handle);
+    engine->setChorusRate(norm);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetChorusDepth(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+    auto* engine = reinterpret_cast<AudioEngine*>(handle);
+    engine->setChorusDepth(norm);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetTrackSends(JNIEnv *env, jobject obj, jlong handle,
+                                                             jint trackIdx, jfloat rev, jfloat del, jfloat cho) {
+    auto* engine = reinterpret_cast<AudioEngine*>(handle);
+    engine->setTrackSends(static_cast<int>(trackIdx), rev, del, cho);
+}
+
+JNIEXPORT jfloatArray JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeGetTrackPeaks(JNIEnv *env, jobject obj, jlong handle) {
+    auto* engine = reinterpret_cast<AudioEngine*>(handle);
+    jfloatArray result = env->NewFloatArray(8);
+    jfloat peaks[8];
+    for (int i = 0; i < 8; ++i) peaks[i] = engine->getTrackPeak(i);
+    env->SetFloatArrayRegion(result, 0, 8, peaks);
+    return result;
+}
+
+JNIEXPORT jfloat JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeGetMasterPeak(JNIEnv *env, jobject obj, jlong handle) {
+    return reinterpret_cast<AudioEngine*>(handle)->getMasterPeak();
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetEqBand(JNIEnv *env, jobject obj, jlong handle, jint band, jfloat dBgain) {
+    reinterpret_cast<AudioEngine*>(handle)->setEqBand(static_cast<int>(band), dBgain);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetHpFreq(JNIEnv *env, jobject obj, jlong handle, jfloat hz) {
+    reinterpret_cast<AudioEngine*>(handle)->setHpFreq(hz);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetHpRes(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+    reinterpret_cast<AudioEngine*>(handle)->setHpRes(norm);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetLpFreq(JNIEnv *env, jobject obj, jlong handle, jfloat hz) {
+    reinterpret_cast<AudioEngine*>(handle)->setLpFreq(hz);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetLpRes(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+    reinterpret_cast<AudioEngine*>(handle)->setLpRes(norm);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetLimiterThreshold(JNIEnv *env, jobject obj, jlong handle, jfloat dB) {
+    reinterpret_cast<AudioEngine*>(handle)->setLimiterThreshold(dB);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetMasterVolume(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+    reinterpret_cast<AudioEngine*>(handle)->setMasterVolume(norm);
 }
 
 } // extern "C"

@@ -108,7 +108,7 @@ class SamplerParams {
     // Logarithmic scale: 20 Hz to 20 kHz
     final freq = 20.0 * pow(1000.0, lpCutoff);
     if (freq >= 1000) {
-      return (freq / 1000).toStringAsFixed(1) + 'k';
+      return '${(freq / 1000).toStringAsFixed(1)}k';
     } else {
       return freq.toStringAsFixed(0);
     }
@@ -119,7 +119,7 @@ class SamplerParams {
     // Logarithmic scale: 20 Hz to 20 kHz
     final freq = 20.0 * pow(1000.0, hpCutoff);
     if (freq >= 1000) {
-      return (freq / 1000).toStringAsFixed(1) + 'k';
+      return '${(freq / 1000).toStringAsFixed(1)}k';
     } else {
       return freq.toStringAsFixed(0);
     }

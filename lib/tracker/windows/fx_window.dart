@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../tracker_model.dart';
 import '../tracker_styles.dart';
+import '../audio/audio_engine.dart';
 
 const _rowH = 36.0;
 
@@ -103,27 +104,27 @@ class _FxWindowState extends State<FxWindow> {
           // ── Reverb ──────────────────────────────────────────────────────
           _sectionHeader('REVERB'),
           _paramRow('SIZE', fx.reverbSize,  0, 1, _pct(fx.reverbSize),
-              (v) => fx.reverbSize  = v),
+              (v) { fx.reverbSize = v; NativeAudioEngine.setReverbSize(v); }),
           _paramRow('DAMP', fx.reverbDamp,  0, 1, _pct(fx.reverbDamp),
-              (v) => fx.reverbDamp  = v),
+              (v) { fx.reverbDamp = v; NativeAudioEngine.setReverbDamping(v); }),
           _paramRow('WID',  fx.reverbWidth, 0, 1, _pct(fx.reverbWidth),
-              (v) => fx.reverbWidth = v),
+              (v) { fx.reverbWidth = v; NativeAudioEngine.setReverbWidth(v); }),
 
           // ── Delay ────────────────────────────────────────────────────────
           _sectionHeader('DELAY'),
           _paramRow('L TM', fx.delayTimeL,    1, 16, _lines(fx.delayTimeL),
-              (v) => fx.delayTimeL   = v),
+              (v) { fx.delayTimeL = v; NativeAudioEngine.setDelayTime((v - 1) / 15); }),
           _paramRow('R TM', fx.delayTimeR,    1, 16, _lines(fx.delayTimeR),
-              (v) => fx.delayTimeR   = v),
+              (v) { fx.delayTimeR = v; NativeAudioEngine.setDelayTime((v - 1) / 15); }),
           _paramRow('FDBK', fx.delayFeedback,  0,    1, _pct(fx.delayFeedback),
-              (v) => fx.delayFeedback = v),
+              (v) { fx.delayFeedback = v; NativeAudioEngine.setDelayFeedback(v); }),
 
           // ── Chorus ───────────────────────────────────────────────────────
           _sectionHeader('CHORUS'),
           _paramRow('RATE', fx.chorusRate,  0.1, 5,   _hz(fx.chorusRate),
-              (v) => fx.chorusRate  = v),
+              (v) { fx.chorusRate = v; NativeAudioEngine.setChorusRate((v - 0.1) / 4.9); }),
           _paramRow('DPTH', fx.chorusDepth, 0,   1,   _pct(fx.chorusDepth),
-              (v) => fx.chorusDepth = v),
+              (v) { fx.chorusDepth = v; NativeAudioEngine.setChorusDepth(v); }),
 
           const SizedBox(height: 8),
 

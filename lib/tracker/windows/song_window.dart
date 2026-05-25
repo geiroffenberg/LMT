@@ -87,18 +87,34 @@ class SongWindow extends StatelessWidget {
                             ...List.generate(_numCols, (colIndex) {
                               final isCursor = isRowCursor && model.cursorCol == colIndex;
                               final chainRef = model.song.chains[rowIndex][colIndex];
-                              String text = chainRef == 0
+                              // Empty cells always show '--', even when the cursor is on them
+                              final String text = chainRef == 0
                                   ? '--'
                                   : chainRef.toString().padLeft(2, '0');
-                              if (isCursor) {
-                                text = chainRef == 0 ? '00' : chainRef.toString().padLeft(2, '0');
-                              }
+                              // Cyan tint when the referenced chain has actual phrase data
+                              final bool chainHasData = chainRef > 0 &&
+                                  model.chains[chainRef - 1].items
+                                      .any((item) => item.phrase != 0);
+                              final cellTextStyle = isPlaying
+                                  ? playingStyle
+                                  : chainHasData
+                                      ? trackerStyle(size: fontSize, color: kCyan)
+                                      : textStyle;
                               return GestureDetector(
                                 behavior: HitTestBehavior.opaque,
                                 onTap: () {
+                                  final isDouble = model.isDoubleClick(rowIndex, colIndex, 0);
                                   model.clearLineSelection();
                                   model.cursorRow = rowIndex;
                                   model.cursorCol = colIndex;
+                                  if (isDouble && chainRef == 0) {
+                                    // Double-tap on empty cell: assign the first
+                                    // available empty chain number
+                                    final chainNum = model.firstAvailableChain();
+                                    if (chainNum > 0) {
+                                      model.song.chains[rowIndex][colIndex] = chainNum;
+                                    }
+                                  }
                                   model.enterEditMode();
                                   model.editMenuVisible = true;
                                   onStateChange();
@@ -112,7 +128,7 @@ class SongWindow extends StatelessWidget {
                                   alignment: Alignment.center,
                                   child: Text(
                                     text,
-                                    style: isPlaying ? playingStyle : textStyle,
+                                    style: cellTextStyle,
                                   ),
                                 ),
                               );

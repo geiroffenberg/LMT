@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/gestures.dart';
 import 'tracker_model.dart';
 import 'tracker_styles.dart';
 import 'windows/song_window.dart';
@@ -28,6 +28,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   final List<String> windowNames = ['S', 'C', 'P', 'I', 'M'];
   int _samplerInstrumentOpen = -1;  // -1 = no sampler open, >=0 = instrument index
   Timer? _stepTimer;
+  Timer? _meterTimer;
 
   // Playback tracking
   List<int> _songRowMap    = [];  // C++ row index → song row number
@@ -47,6 +48,8 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       const Duration(seconds: 60),
       (_) => _autoSave(),
     );
+    // Poll native audio peaks for LED meters (~12.5 fps)
+    _meterTimer = Timer.periodic(const Duration(milliseconds: 80), (_) => _pollMeters());
   }
 
   @override
@@ -54,6 +57,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     WidgetsBinding.instance.removeObserver(this);
     _autoSaveTimer?.cancel();
     _stepTimer?.cancel();
+    _meterTimer?.cancel();
     super.dispose();
   }
 
@@ -64,6 +68,21 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         state == AppLifecycleState.detached) {
       _autoSave();
     }
+    // Reinitialize the native audio engine when the app comes back to the
+    // foreground — the Oboe stream may have been released while backgrounded.
+    if (state == AppLifecycleState.resumed) {
+      _reinitAudio();
+    }
+  }
+
+  Future<void> _reinitAudio() async {
+    await NativeAudioEngine.initialize();
+    for (int i = 0; i < model.instruments.length; i++) {
+      final samplePath = model.instruments[i].sample;
+      if (samplePath.isNotEmpty) {
+        await NativeAudioEngine.loadSample(i, samplePath);
+      }
+    }
   }
 
   Future<void> _autoSave() async {
@@ -71,6 +90,35 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       await ProjectManager.saveProject(ProjectManager.autoSaveName, model);
     } catch (e) {
       debugPrint('Autosave failed: $e');
+    }
+  }
+
+  Future<void> _pollMeters() async {
+    if (!mounted) return;
+    final results = await Future.wait([
+      NativeAudioEngine.getTrackPeaks(),
+      NativeAudioEngine.getMasterPeak().then((v) => [v]),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      final peaks = results[0];
+      for (int i = 0; i < 8 && i < peaks.length; i++) {
+        model.audioLevels[i] = peaks[i];
+      }
+      model.masterPeak = results[1][0];
+    });
+  }
+
+  /// Push all 8 mixer channel send levels to the native audio engine.
+  void _syncMixerSendsToNative() {
+    for (int i = 0; i < model.mixerChannels.length; i++) {
+      final ch = model.mixerChannels[i];
+      NativeAudioEngine.setTrackSends(
+        i,
+        ch.reverbSend / 99.0,
+        ch.delaySend  / 99.0,
+        ch.chorusSend / 99.0,
+      );
     }
   }
 
@@ -237,6 +285,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
           } else {
             setState(() {
               model.applyEdit(model.editBuffer);
+              if (model.currentWindow == 4) _syncMixerSendsToNative();
             });
           }
         } else {
@@ -374,25 +423,39 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              // Meter (green bar)
-                              Container(
-                                width: meterWidth,
-                                height: 40,
-                                decoration: BoxDecoration(
-                                  border: Border.all(color: Colors.white, width: 1),
-                                  color: Colors.black,
-                                ),
-                                child: Stack(
-                                  alignment: Alignment.bottomCenter,
-                                  children: [
-                                    Container(
-                                      width: meterWidth,
-                                      height: 40 * (audioLevel / 100),
-                                      color: kGreen,
-                                    ),
-                                  ],
-                                ),
-                              ),
+                              // LED meter: 6 blocks × 5 dB, range −30..0 dB
+                              Builder(builder: (context) {
+                                final double dB = audioLevel > 1e-6
+                                    ? 20.0 * math.log(audioLevel) / math.ln10
+                                    : -60.0;
+                                return Container(
+                                  width: meterWidth,
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    border: Border.all(color: Colors.white, width: 1),
+                                    color: Colors.black,
+                                  ),
+                                  padding: const EdgeInsets.all(2),
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    children: List.generate(6, (i) {
+                                      // i=0 = top block (−5..0 dB), i=5 = bottom (−30..−25 dB)
+                                      final int blockIdx = 5 - i;
+                                      final double thresh = -30.0 + blockIdx * 5.0;
+                                      final bool lit = dB >= thresh;
+                                      final bool isHot = blockIdx == 5;
+                                      return Container(
+                                        width: double.infinity,
+                                        height: 5,
+                                        margin: EdgeInsets.only(bottom: i < 5 ? 1.0 : 0.0),
+                                        color: lit
+                                            ? (isHot ? Colors.orange : kGreen)
+                                            : const Color(0xFF1A1A1A),
+                                      );
+                                    }),
+                                  ),
+                                );
+                              }),
                               const SizedBox(height: 2),
                               // Level number
                               GestureDetector(
@@ -928,6 +991,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                             });
                           } else {
                             model.performMenuAction(item);
+                            if (model.currentWindow == 4) _syncMixerSendsToNative();
                             setState(() {});
                           }
                         },
@@ -960,6 +1024,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                             });
                           } else {
                             model.performMenuAction(item);
+                            if (model.currentWindow == 4) _syncMixerSendsToNative();
                             setState(() {});
                           }
                         },

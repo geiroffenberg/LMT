@@ -10,6 +10,7 @@
 #include <string>
 #include <memory>
 #include <jni.h>
+#include "../master_fx.h"
 
 static constexpr int kMaxVoices = 99; // one per instrument in LMT
 
@@ -43,6 +44,12 @@ struct Voice {
     float releaseK = 0.0f;         // one-pole coefficient for release decay
     int loopMode = 0;              // 0=OFF, 1=LOOP, 2=PING
     bool pingDir = false;          // false=forward, true=backward (for PING mode)
+
+    float reverbSend = 0.0f;       // 0..1 send to reverb
+    float delaySend  = 0.0f;       // 0..1 send to delay
+    float chorusSend = 0.0f;       // 0..1 send to chorus
+
+    int   trackIdx   = -1;         // 0-7 mixer track (set by fireRow)
 
     float cutoffNorm = 0.7f;       // 0..1 filter cutoff
     float resonanceNorm = 0.2f;    // 0..1 filter resonance
@@ -118,6 +125,37 @@ public:
     /// Consume row-advance ticks accumulated since the last call.
     /// Returns the number of rows the playhead has advanced (for Dart UI update).
     int32_t consumePendingRowAdvances();
+    // -----------------------------------------------------------------------
+    // Master Effects API
+    // -----------------------------------------------------------------------
+
+    void setReverbSize(float norm);      // 0..1
+    void setReverbDamping(float norm);   // 0..1
+    void setReverbWidth(float norm);     // 0..1
+
+    void setDelayTime(float norm);       // 0..1 → ~10..2000 ms
+    void setDelayFeedback(float norm);   // 0..1
+
+    void setChorusRate(float norm);      // 0..1 → ~0.1..8 Hz
+    void setChorusDepth(float norm);     // 0..1 → ~0..15 ms
+
+    // Per-track send levels (8 tracks, all 0..1)
+    void setTrackSends(int trackIdx, float rev, float del, float cho);
+
+    // Per-track peak levels for metering (linear 0..1, with slow decay)
+    float getTrackPeak(int t) const { return (t >= 0 && t < 8) ? mTrackPeakLinear[t] : 0.0f; }
+
+    // Post-limiter master bus peak for the master VU meter
+    float getMasterPeak() const { return mMasterPeakLinear; }
+
+    // Master chain: EQ-5 → HP → LP → Limiter → Volume
+    void setEqBand(int band, float dBgain);   // band 0-4, dBgain -12..+12
+    void setHpFreq(float hz);                  // 20..1000 Hz
+    void setHpRes(float norm);                 // 0..1 → Q 0.5..5.0
+    void setLpFreq(float hz);                  // 1000..20000 Hz
+    void setLpRes(float norm);                 // 0..1 → Q 0.5..5.0
+    void setLimiterThreshold(float dB);        // 0..12 dB drive into -0.3 dBFS ceiling
+    void setMasterVolume(float norm);          // 0..1
 
     /// AudioStreamDataCallback
     oboe::DataCallbackResult onAudioReady(
@@ -147,6 +185,25 @@ private:
     bool                   mSeqRunning      = false;
     bool                   mSeqLoop         = false;
     std::atomic<int32_t>   mPendingAdvances {0};   // rows advanced since last poll
+
+    // Per-track send levels (8 tracks)
+    float mTrackReverbSend[8] = {};
+    float mTrackDelaySend[8]  = {};
+    float mTrackChorusSend[8] = {};
+
+    // Per-track peak levels for VU meters (linear 0..1, audio-thread write / JNI read)
+    float mTrackPeakLinear[8] = {};
+    float mMasterPeakLinear   = 0.0f;
+
+    // Non-interleaved processing buffers (sized in open())
+    std::vector<float> mDryL, mDryR;
+    std::vector<float> mRevSendL, mRevSendR;
+    std::vector<float> mDelSendL, mDelSendR;
+    std::vector<float> mChoSendL, mChoSendR;
+    std::vector<float> mWetL, mWetR;
+
+    // Master effects (created on open, uses mSampleRate)
+    std::unique_ptr<class MasterFX> mMasterFX;
 
     // Fire note events for a given row
     void fireRow(const QueuedRow& row);
