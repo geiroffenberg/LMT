@@ -44,11 +44,11 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     model = widget.initialModel ?? TrackerModel();
-    // Autosave every 60 seconds
-    _autoSaveTimer = Timer.periodic(
-      const Duration(seconds: 60),
-      (_) => _autoSave(),
-    );
+    // Autosave disabled — use SAVE SONG from the menu
+    // _autoSaveTimer = Timer.periodic(
+    //   const Duration(seconds: 60),
+    //   (_) => _autoSave(),
+    // );
     // Poll native audio peaks for LED meters (~12.5 fps)
     _meterTimer = Timer.periodic(const Duration(milliseconds: 80), (_) => _pollMeters());
   }
@@ -68,7 +68,8 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     // Save when the app is backgrounded or the process is about to be killed
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
-      _autoSave();
+      // Autosave disabled
+      // _autoSave();
     }
     // Reinitialize the native audio engine when the app comes back to the
     // foreground — the Oboe stream may have been released while backgrounded.
@@ -87,13 +88,14 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     }
   }
 
-  Future<void> _autoSave() async {
-    try {
-      await ProjectManager.saveProject(ProjectManager.autoSaveName, model);
-    } catch (e) {
-      debugPrint('Autosave failed: $e');
-    }
-  }
+  // Autosave disabled — use SAVE SONG from the menu
+  // Future<void> _autoSave() async {
+  //   try {
+  //     await ProjectManager.saveProject(ProjectManager.autoSaveName, model);
+  //   } catch (e) {
+  //     debugPrint('Autosave failed: $e');
+  //   }
+  // }
 
   Future<void> _pollMeters() async {
     if (!mounted) return;
@@ -631,7 +633,22 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          children: menuItems.map((item) {
+          children: [
+            // Project name header
+            Container(
+              height: 36,
+              decoration: const BoxDecoration(
+                border: Border(bottom: BorderSide(color: Colors.white, width: 1)),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                model.currentProjectName,
+                style: trackerStyle(size: 18, color: kGreen),
+                textAlign: TextAlign.center,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            ...menuItems.map((item) {
             return GestureDetector(
               onTap: () {
                 setState(() {
@@ -657,7 +674,29 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                 ),
               ),
             );
-          }).toList(),
+          }),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showStatusSnackBar(bool ok, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        duration: const Duration(seconds: 3),
+        content: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1A1A1A),
+            border: Border.all(color: ok ? kGreen : Colors.red, width: 2),
+          ),
+          child: Text(
+            message,
+            style: trackerStyle(size: 18, color: ok ? kGreen : Colors.red),
+          ),
         ),
       ),
     );
@@ -666,52 +705,31 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   void _handleProjectMenuAction(String action) async {
     switch (action) {
       case 'SAVE SONG':
-        // Save to current project (or UNTITLED if no project)
         final projectName = model.currentProjectName;
-        print('Saving project: $projectName');
-        await ProjectManager.saveProject(projectName, model);
+        final saveOk = await ProjectManager.saveProject(projectName, model);
         setState(() {});
+        if (mounted) _showStatusSnackBar(saveOk, saveOk ? 'Saved: $projectName' : 'Save FAILED — check logs');
         break;
 
       case 'SAVE AS...':
-        // Show dialog to enter new project name
         final newName = await _showProjectNameDialog('SAVE AS');
         if (newName != null && newName.isNotEmpty) {
-          print('Saving as: $newName');
-          await ProjectManager.saveProject(newName, model);
-          model.setCurrentProject(newName, '');
+          final saveOk = await ProjectManager.saveProject(newName, model);
+          if (saveOk) model.setCurrentProject(newName, '');
           setState(() {});
+          if (mounted) _showStatusSnackBar(saveOk, saveOk ? 'Saved as: $newName' : 'Save FAILED — check logs');
         }
         break;
 
       case 'NEW SONG':
-        showDialog(
-          context: context,
-          builder: (BuildContext ctx) => AlertDialog(
-            backgroundColor: Colors.black,
-            elevation: 0,
-            shape: const RoundedRectangleBorder(
-              side: BorderSide(color: Colors.white54),
-              borderRadius: BorderRadius.zero,
-            ),
-            title: Text('New Song', style: trackerStyle(size: 22, color: Colors.white)),
-            content: Text('Clear all song data and start fresh?', style: trackerStyle(size: 18)),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: Text('Cancel', style: trackerStyle(size: 18, color: Colors.white54)),
-              ),
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(ctx);
-                  model.newSong();
-                  setState(() {});
-                },
-                child: Text('Create', style: trackerStyle(size: 18, color: kGreen)),
-              ),
-            ],
-          ),
-        );
+        final songName = await _showProjectNameDialog('NEW SONG');
+        if (songName != null && songName.isNotEmpty) {
+          model.newSong();
+          model.setCurrentProject(songName, '');
+          final saveOk = await ProjectManager.saveProject(songName, model);
+          setState(() {});
+          if (mounted) _showStatusSnackBar(saveOk, saveOk ? 'Created: $songName' : 'Save FAILED — check logs');
+        }
         break;
 
       case 'LOAD SONG':

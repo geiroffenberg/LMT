@@ -995,8 +995,9 @@ class TrackerModel {
           if (trackItems[t].isEmpty) continue;
           final ci = trackItems[t][slot % trackItems[t].length];
           for (final fx in ci.fx) {
-            if (fx.name == 'BPM') currentBpm = fxValToBpm(fx.value);
-            else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
+            if (fx.name == 'BPM') {
+              currentBpm = fxValToBpm(fx.value);
+            } else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
             // HOP: non-linear chain jump — TODO
           }
         }
@@ -1021,8 +1022,9 @@ class TrackerModel {
             if (phraseLen == 0) continue;
             final ps = ph.steps[step % phraseLen];
             for (final fx in ps.fx) {
-              if (fx.name == 'BPM') currentBpm = fxValToBpm(fx.value);
-              else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
+              if (fx.name == 'BPM') {
+                currentBpm = fxValToBpm(fx.value);
+              } else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
             }
           }
 
