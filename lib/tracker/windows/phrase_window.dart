@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../tracker_model.dart';
 import '../tracker_styles.dart';
+import '../fx_commands.dart';
 
 const _rowNumW = 32.0;
 const _rowH    = 28.0;
@@ -103,26 +104,44 @@ class PhraseWindow extends StatelessWidget {
                             final fxIdx = (colIdx - 2) ~/ 2;
                             final isValueCol = (colIdx - 2) % 2 == 1;
                             if (fxIdx < step.fx.length) {
-                              text = isValueCol 
+                              text = isValueCol
                                 ? step.fx[fxIdx].value.toString().padLeft(2, '0')
-                                : step.fx[fxIdx].name;
+                                : step.fx[fxIdx].name; // '---', 'ARP', etc.
                             }
                           }
-                          
-                          if (isCursor && colIdx != 0) {
-                            // Show actual value if non-zero, otherwise show 00
-                            int val = int.tryParse(text.replaceAll('--', '0')) ?? 0;
+
+                          // FX name columns (colIdx 2 & 4): never show '00' — always show name.
+                          // Value/numeric columns: show '00' when cursor is on them and empty.
+                          final isFxNameCol = colIdx >= 2 && (colIdx - 2) % 2 == 0;
+                          if (isCursor && colIdx != 0 && !isFxNameCol) {
+                            final val = int.tryParse(text.replaceAll('--', '0')) ?? 0;
                             text = val == 0 ? '00' : val.toString().padLeft(2, '0');
                           }
-                          
+
                           return GestureDetector(
                             behavior: HitTestBehavior.opaque,
-                            onTap: () {
+                            onTap: () async {
+                              final isDouble = model.isDoubleClick(row, col, 2);
                               model.clearLineSelection();
                               model.cursorRow = row;
                               model.cursorCol = col;
-                              model.enterEditMode();
-                              model.editMenuVisible = true;
+
+                              if (isFxNameCol && isDouble) {
+                                // Double-tap on FX name: show picker
+                                final fxIdx = (colIdx - 2) ~/ 2;
+                                final picked = await showFxCommandPicker(context, isPhrase: true);
+                                if (picked != null && fxIdx < step.fx.length) {
+                                  if (picked == '---') {
+                                    step.fx[fxIdx].name  = '---';
+                                    step.fx[fxIdx].value = 0;
+                                  } else {
+                                    step.fx[fxIdx].name = picked;
+                                  }
+                                }
+                              } else {
+                                model.enterEditMode();
+                                model.editMenuVisible = true;
+                              }
                               onStateChange();
                             },
                             child: Container(

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../tracker_model.dart';
 import '../tracker_styles.dart';
+import '../fx_commands.dart';
 
 const _rowNumW = 32.0;
 const _rowH    = 28.0;
@@ -112,9 +113,13 @@ class ChainWindow extends StatelessWidget {
                     ...List.generate(_numCols, (col) {
                       final isCursor = isRowCursor && model.cursorCol == col;
                       String text = cellText(col);
-                      // PH column: keep '--' for empty even when cursor is on it;
-                      // other columns keep the '00' convention.
-                      if (col != 0 && isCursor && text == '--') text = '00';
+
+                      // FX name columns (col 2 & 4): always keep '---' when empty.
+                      // Other non-PH columns: show '00' under cursor when empty.
+                      final isFxNameCol = col >= 2 && (col - 2) % 2 == 0;
+                      if (!isFxNameCol && col != 0 && isCursor && text == '--') {
+                        text = '00';
+                      }
 
                       // Cyan tint on PH column when the referenced phrase has note data
                       final bool phraseHasData = col == 0 &&
@@ -127,15 +132,27 @@ class ChainWindow extends StatelessWidget {
 
                       return GestureDetector(
                         behavior: HitTestBehavior.opaque,
-                        onTap: () {
+                        onTap: () async {
                           final isDouble = col == 0
                               ? model.isDoubleClick(row, col, 1)
-                              : false;
+                              : model.isDoubleClick(row, col, 1);
                           model.clearLineSelection();
                           model.cursorRow = row;
                           model.cursorCol = col;
-                          // PH column: double-tap empty cell → first available phrase
-                          if (col == 0 && isDouble && item.phrase == 0) {
+
+                          if (isFxNameCol && isDouble) {
+                            // Double-tap on FX name: show picker (chain-window commands)
+                            final fxIdx = (col - 2) ~/ 2;
+                            final picked = await showFxCommandPicker(context, isPhrase: false);
+                            if (picked != null && fxIdx < item.fx.length) {
+                              if (picked == '---') {
+                                item.fx[fxIdx].name  = '---';
+                                item.fx[fxIdx].value = 0;
+                              } else {
+                                item.fx[fxIdx].name = picked;
+                              }
+                            }
+                          } else if (col == 0 && isDouble && item.phrase == 0) {
                             final phraseNum = model.firstAvailablePhrase();
                             if (phraseNum > 0) {
                               model.chains[model.activeChainIdx].items[row].phrase = phraseNum;

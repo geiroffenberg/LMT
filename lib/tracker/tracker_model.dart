@@ -596,6 +596,14 @@ class TrackerModel {
       } else if (cursorCol == 2) {
         intValue = intValue.clamp(0, 99);
         phrases[activePhraseIdx].steps[cursorRow].volume = intValue;
+      } else if (cursorCol >= 3) {
+        // FX columns: col 3=FX1 name, 4=FX1 val, 5=FX2 name, 6=FX2 val
+        final fxIndex = (cursorCol - 3) ~/ 2;
+        final isValue = (cursorCol - 3) % 2 == 1;
+        if (isValue && fxIndex < phrases[activePhraseIdx].steps[cursorRow].fx.length) {
+          phrases[activePhraseIdx].steps[cursorRow].fx[fxIndex].value =
+              intValue.clamp(0, 99);
+        }
       }
     } else if (currentWindow == 3) {
       // Instrument

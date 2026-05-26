@@ -1,3 +1,6 @@
+import 'package:flutter/material.dart';
+import 'tracker_styles.dart';
+
 // ── LMT FX Command Registry ───────────────────────────────────────────────
 //
 // Each entry: 'CMD' → (description, valueHint, windows)
@@ -97,4 +100,102 @@ String? mixerCommandDesc(String cmd) {
   final p = params[param];
   if (p == null) return null;
   return 'Ch$ch $p';
+}
+
+// ── FX command picker dialog ───────────────────────────────────────────────
+// Opens a tracker-styled dialog listing all commands available in the given
+// window context.  Returns the chosen command name, '---' to clear, or null
+// if cancelled.
+Future<String?> showFxCommandPicker(
+  BuildContext context, {
+  required bool isPhrase, // true = phrase window, false = chain window
+}) async {
+  final commands = kFxCommands.entries
+      .where((e) => isPhrase
+          ? e.value.windows == 'P' || e.value.windows == 'B'
+          : e.value.windows == 'C' || e.value.windows == 'B')
+      .toList();
+
+  return showDialog<String>(
+    context: context,
+    builder: (ctx) => Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 40),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.black,
+          border: Border.all(color: Colors.white, width: 2),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Title bar
+            Container(
+              height: 40,
+              decoration: const BoxDecoration(
+                border: Border(bottom: BorderSide(color: Colors.white, width: 1)),
+              ),
+              alignment: Alignment.center,
+              child: Text('SELECT FX', style: trackerStyle(size: 20, color: Colors.white)),
+            ),
+            // "---" clear row
+            GestureDetector(
+              onTap: () => Navigator.pop(ctx, '---'),
+              child: Container(
+                height: 36,
+                decoration: const BoxDecoration(
+                  border: Border(bottom: BorderSide(color: Colors.white, width: 1)),
+                ),
+                alignment: Alignment.centerLeft,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Text('---  clear', style: trackerStyle(size: 18, color: Colors.white54)),
+              ),
+            ),
+            // Command list
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: commands.length,
+                itemBuilder: (_, i) {
+                  final entry = commands[i];
+                  final isLast = i == commands.length - 1;
+                  return GestureDetector(
+                    onTap: () => Navigator.pop(ctx, entry.key),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                      decoration: BoxDecoration(
+                        border: isLast
+                            ? null
+                            : const Border(bottom: BorderSide(color: Colors.white24, width: 1)),
+                      ),
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 46,
+                            child: Text(entry.key, style: trackerStyle(size: 18, color: kGreen)),
+                          ),
+                          Expanded(
+                            child: Text(
+                              entry.value.desc,
+                              style: trackerStyle(size: 13, color: Colors.white70),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            entry.value.value,
+                            style: trackerStyle(size: 13, color: Colors.white38),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
