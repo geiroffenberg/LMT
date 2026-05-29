@@ -177,14 +177,14 @@ Future<String?> showFxCommandPicker(
                           Expanded(
                             child: Text(
                               entry.value.desc,
-                              style: trackerStyle(size: 13, color: Colors.white70),
+                              style: trackerStyle(size: 16, color: Colors.white70),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
                           const SizedBox(width: 8),
                           Text(
                             entry.value.value,
-                            style: trackerStyle(size: 13, color: Colors.white38),
+                            style: trackerStyle(size: 16, color: Colors.white38),
                           ),
                         ],
                       ),

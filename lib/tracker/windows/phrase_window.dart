@@ -167,84 +167,37 @@ class PhraseWindow extends StatelessWidget {
     );
   }
 
-  Widget _buildNoteCell(int row, PhraseStep step, bool isRowCursor, TextStyle gs, TextStyle ts, 
+  Widget _buildNoteCell(int row, PhraseStep step, bool isRowCursor, TextStyle gs, TextStyle ts,
       double cellW, double fontSize, VoidCallback onStateChange) {
     final isCursor = isRowCursor && model.cursorCol == 0;
-    
-    return Stack(
-      children: [
-        // Background container with text display (like other cells)
-        Container(
-          width: cellW,
-          height: _rowH,
-          decoration: BoxDecoration(
-            border: isCursor ? Border.all(color: kGreen, width: 2.0) : null,
-          ),
-          alignment: Alignment.center,
-          child: Text(
-            step.getNoteDisplay(),
-            style: ts,
-          ),
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        final isDouble = model.isDoubleClick(row, 0, 2);
+        model.clearLineSelection();
+        model.cursorRow = row;
+        model.cursorCol = 0;
+        if (isDouble && step.note < 0) {
+          // Double-tap on empty note: insert C-4
+          step.note = 60;
+        }
+        model.enterEditMode();
+        model.editMenuVisible = true;
+        onStateChange();
+      },
+      child: Container(
+        width: cellW,
+        height: _rowH,
+        decoration: BoxDecoration(
+          border: isCursor ? Border.all(color: kGreen, width: 2.0) : null,
         ),
-        
-        // Left third: minus tap zone (invisible)
-        Positioned(
-          left: 0,
-          top: 0,
-          width: cellW * 0.33,
-          height: _rowH,
-          child: GestureDetector(
-            onTap: () {
-              if (step.note >= 0) {
-                step.note = (step.note - 12).clamp(0, 120);
-                onStateChange();
-              }
-            },
-            child: Container(color: Colors.transparent),
-          ),
+        alignment: Alignment.center,
+        child: Text(
+          step.getNoteDisplay(),
+          style: ts,
         ),
-        
-        // Center third: toggle tap zone (invisible)
-        Positioned(
-          left: cellW * 0.33,
-          top: 0,
-          width: cellW * 0.34,
-          height: _rowH,
-          child: GestureDetector(
-            onTap: () {
-              bool isDouble = model.isDoubleClick(row, 0, 2);
-              model.clearLineSelection();
-              model.cursorRow = row;
-              model.cursorCol = 0;
-              if (isDouble && step.note < 0) {
-                // Second tap: set to C-4
-                step.note = 60;
-              }
-              model.enterEditMode();
-              model.editMenuVisible = true;
-              onStateChange();
-            },
-            child: Container(color: Colors.transparent),
-          ),
-        ),
-        
-        // Right third: plus tap zone (invisible)
-        Positioned(
-          right: 0,
-          top: 0,
-          width: cellW * 0.33,
-          height: _rowH,
-          child: GestureDetector(
-            onTap: () {
-              if (step.note >= 0) {
-                step.note = (step.note + 12).clamp(0, 120);
-                onStateChange();
-              }
-            },
-            child: Container(color: Colors.transparent),
-          ),
-        ),
-      ],
+      ),
     );
   }
 }

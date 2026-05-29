@@ -39,6 +39,11 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   Timer? _autoSaveTimer;
   final FocusNode _keyListenerFocusNode = FocusNode();
 
+  // Saved song-view cursor — persists through instrument/mixer visits
+  int _songCursorRow       = 0;
+  int _songCursorCol       = 0;
+  bool _songCellWasEmpty   = true; // true when saved cell had no chain ref
+
   @override
   void initState() {
     super.initState();
@@ -203,28 +208,44 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     model.clearLineSelection();
     final fromWindow = model.currentWindow;
 
+    // ── Save song cursor whenever leaving song view ────────────────────────
+    if (fromWindow == 0) {
+      _songCursorRow    = model.cursorRow;
+      _songCursorCol    = model.cursorCol;
+      _songCellWasEmpty = model.song.chains[model.cursorRow][model.cursorCol] <= 0;
+    }
+
     // ── Forward navigation rules ─────────────────────────────────────────
-    // Chain window: only blocked when coming from Song with no chain selected.
+    // Chain window
     if (windowIndex == 1) {
       if (fromWindow == 0) {
+        // Direct from song: use current song cursor.
         final chainRef = model.song.chains[model.cursorRow][model.cursorCol];
         if (chainRef <= 0) return;
         model.activeChainIdx = chainRef - 1;
+      } else if (fromWindow == 3 || fromWindow == 4) {
+        // From instrument/mixer: use saved song cursor.
+        if (_songCellWasEmpty) return;
+        final chainRef = model.song.chains[_songCursorRow][_songCursorCol];
+        if (chainRef <= 0) return;
+        model.activeChainIdx = chainRef - 1;
       }
-      // From Phrase, INST, MIXER, or Chain itself: always allowed.
+      // From Phrase or Chain itself: always allowed, activeChainIdx already set.
     }
-    // Phrase window: only blocked when coming from Chain with no phrase selected.
+    // Phrase window
     else if (windowIndex == 2) {
       if (fromWindow == 1) {
         final item = model.chains[model.activeChainIdx].items[model.cursorRow];
         if (item.phrase <= 0) return;
         model.activePhraseIdx = item.phrase - 1;
-      }
-      // From Song directly: blocked unless we have a valid activeChainIdx already.
-      else if (fromWindow == 0) {
+      } else if (fromWindow == 0) {
         return; // must go Song → Chain first
+      } else if (fromWindow == 3 || fromWindow == 4) {
+        // From instrument/mixer: block if the saved song cell had no chain.
+        if (_songCellWasEmpty) return;
+        // Otherwise allow — activeChainIdx/activePhraseIdx from prior navigation.
       }
-      // From INST, MIXER, or Phrase itself: always allowed.
+      // From Phrase itself: always allowed.
     }
 
     // ── Always allowed: Song, Instrument, Mixer ──────────────────────────
@@ -232,21 +253,29 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     model.currentWindow = windowIndex;
 
     if (windowIndex == 0) {
-      // Returning to Song: place cursor on the cell that references the active chain
-      final targetChain = model.activeChainIdx + 1;
-      bool found = false;
-      outer:
-      for (int r = 0; r < model.song.chains.length; r++) {
-        for (int c = 0; c < model.song.chains[r].length; c++) {
-          if (model.song.chains[r][c] == targetChain) {
-            model.cursorRow = r;
-            model.cursorCol = c;
-            found = true;
-            break outer;
+      if (fromWindow == 3 || fromWindow == 4) {
+        // Returning from instrument/mixer: restore the exact song cursor the
+        // user had before leaving song view.
+        model.cursorRow = _songCursorRow;
+        model.cursorCol = _songCursorCol;
+      } else {
+        // Returning from chain/phrase: land on the song cell that references
+        // the active chain so the breadcrumb stays consistent.
+        final targetChain = model.activeChainIdx + 1;
+        bool found = false;
+        outer:
+        for (int r = 0; r < model.song.chains.length; r++) {
+          for (int c = 0; c < model.song.chains[r].length; c++) {
+            if (model.song.chains[r][c] == targetChain) {
+              model.cursorRow = r;
+              model.cursorCol = c;
+              found = true;
+              break outer;
+            }
           }
         }
+        if (!found) { model.cursorRow = 0; model.cursorCol = 0; }
       }
-      if (!found) { model.cursorRow = 0; model.cursorCol = 0; }
     } else {
       model.cursorRow = 0;
       model.cursorCol = 0;

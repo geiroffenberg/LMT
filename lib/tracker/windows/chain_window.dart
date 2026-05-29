@@ -68,9 +68,11 @@ class ChainWindow extends StatelessWidget {
                             ? '--'
                             : item.phrase.toString().padLeft(2, '0');
                       case 1: // TR
-                        return item.transpose == 0
-                            ? '--'
-                            : item.transpose.toString().padLeft(2, '0');
+                        if (item.transpose == 0) return '--';
+                        if (item.transpose <= 12)
+                          return '+${item.transpose.toString().padLeft(2, '0')}';
+                        // 88-99 → -12 to -01
+                        return '-${(100 - item.transpose).toString().padLeft(2, '0')}';
                       default:
                         final fxIdx   = (col - 2) ~/ 2;
                         final isValue = (col - 2) % 2 == 1;

@@ -570,7 +570,12 @@ class TrackerModel {
         intValue = intValue.clamp(0, 99);
         chains[activeChainIdx].items[cursorRow].phrase = intValue;
       } else if (cursorCol == 1) {
+        // Valid transpose range: 0–12 (semitones up) and 88–99 (semitones down).
+        // Values 13–87 snap to the nearest valid boundary.
         intValue = intValue.clamp(0, 99);
+        if (intValue > 12 && intValue < 88) {
+          intValue = intValue <= 50 ? 12 : 88;
+        }
         chains[activeChainIdx].items[cursorRow].transpose = intValue;
       } else {
         // FX columns: col 2=FX1 name, 3=FX1 val, 4=FX2 name, 5=FX2 val
@@ -1056,9 +1061,13 @@ class TrackerModel {
             int instrIdx = ps.instrument > 0 ? ps.instrument - 1 : -1;
             int midiNote = ps.note;
 
-            // TPO: chain-level semitone transpose (ci.transpose: -12..+12)
-            if (instrIdx >= 0 && midiNote >= 0) {
-              midiNote = (midiNote + ci.transpose).clamp(0, 120);
+            // TPO: chain-level semitone transpose.
+            // Stored: 0=none, 1-12=+semitones, 88-99=-semitones (99=-1, 88=-12).
+            if (instrIdx >= 0 && midiNote >= 0 && ci.transpose != 0) {
+              final int semitones = ci.transpose <= 12
+                  ? ci.transpose
+                  : ci.transpose - 100; // 99→-1, 88→-12
+              midiNote = (midiNote + semitones).clamp(0, 120);
             }
 
             // CHA: probabilistic note skip
@@ -1071,11 +1080,46 @@ class TrackerModel {
               }
             }
 
+            // Chain-level FX overrides for this slot (ci.fx).
+            // BPM/LPB already consumed above; handle VOL/PAN/sends here.
+            int? chainVol, chainPan, chainSnr, chainSnd, chainSnc;
+            for (final cfx in ci.fx) {
+              if (cfx.name == 'VOL')      chainVol = cfx.value;
+              else if (cfx.name == 'PAN') chainPan = cfx.value;
+              else if (cfx.name == 'SNR') chainSnr = cfx.value;
+              else if (cfx.name == 'SND') chainSnd = cfx.value;
+              else if (cfx.name == 'SNC') chainSnc = cfx.value;
+            }
+
             // Pack: [instrIdx, midiNote, vol, fx0id, fx0val, fx1id, fx1val, fx2id, fx2val]
-            noteData.addAll([instrIdx, midiNote, ps.volume]);
-            for (final fx in ps.fx) {
-              noteData.add(_fxIdForC(fx.name));
-              noteData.add(fx.value);
+            // Chain VOL overrides the step's volume column wholesale.
+            final packedVol = chainVol ?? ps.volume;
+
+            // Fill FX slots from phrase step first (3 slots).
+            // Then inject any chain FX into empty slots, skipping ones the
+            // phrase already covers (phrase wins on conflict).
+            final fxIds  = [0, 0, 0];
+            final fxVals = [0, 0, 0];
+            for (int i = 0; i < ps.fx.length && i < 3; i++) {
+              fxIds[i]  = _fxIdForC(ps.fx[i].name);
+              fxVals[i] = ps.fx[i].value;
+            }
+            for (final entry in [
+              (kFxId['PAN'], chainPan),
+              (kFxId['SNR'], chainSnr),
+              (kFxId['SND'], chainSnd),
+              (kFxId['SNC'], chainSnc),
+            ]) {
+              final id = entry.$1; final val = entry.$2;
+              if (id == null || val == null || fxIds.contains(id)) continue;
+              final emptyIdx = fxIds.indexOf(0);
+              if (emptyIdx == -1) break;
+              fxIds[emptyIdx] = id; fxVals[emptyIdx] = val;
+            }
+            noteData.addAll([instrIdx, midiNote, packedVol]);
+            for (int i = 0; i < 3; i++) {
+              noteData.add(fxIds[i]);
+              noteData.add(fxVals[i]);
             }
           }
           rows.add({'lineSamples': lineSamples, 'noteData': noteData});
