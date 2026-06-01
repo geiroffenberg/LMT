@@ -58,8 +58,8 @@ class SongWindow extends StatelessWidget {
                       final isRowCursor  = model.cursorRow == rowIndex;
                       final isPlaying    = model.isPlaying && model.playheadRow == rowIndex;
                       final isSelected   = model.isRowInLineSelection(rowIndex);
-                      Color? rowColor = isPlaying  ? Colors.orange.withOpacity(0.12)
-                                      : isSelected ? Colors.cyan.withOpacity(0.15)
+                      Color? rowColor = isPlaying  ? Colors.orange.withValues(alpha: 0.12)
+                                      : isSelected ? Colors.cyan.withValues(alpha: 0.15)
                                       : null;
                       final rowNumStyle  = isPlaying  ? playingStyle
                                          : isSelected ? trackerStyle(size: fontSize, color: Colors.cyan)
@@ -112,6 +112,7 @@ class SongWindow extends StatelessWidget {
                                     // available empty chain number
                                     final chainNum = model.firstAvailableChain();
                                     if (chainNum > 0) {
+                                      model.pushUndo();
                                       model.song.chains[rowIndex][colIndex] = chainNum;
                                     }
                                   }

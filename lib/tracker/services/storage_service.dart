@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'dart:io';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -9,7 +10,7 @@ class StorageService {
     if (Platform.isAndroid) {
       // For Android 11+, we need MANAGE_EXTERNAL_STORAGE
       final status = await Permission.manageExternalStorage.request();
-      print('Storage permission status: $status');
+      debugPrint('Storage permission status: $status');
       return status.isGranted;
     } else if (Platform.isIOS) {
       final status = await Permission.photos.request();
@@ -24,10 +25,10 @@ class StorageService {
       // Get the root storage directory
       final rootDir = Directory('/storage/emulated/0');
       final projectsDir = Directory('${rootDir.path}/$projectsFolderName');
-      print('Projects folder path: ${projectsDir.path}');
+      debugPrint('Projects folder path: ${projectsDir.path}');
       return projectsDir;
     } catch (e) {
-      print('Error getting projects folder: $e');
+      debugPrint('Error getting projects folder: $e');
       return null;
     }
   }
@@ -35,45 +36,45 @@ class StorageService {
   /// Initialize storage: create LMT_PROJECTS folder if it doesn't exist
   static Future<bool> initializeStorage() async {
     try {
-      print('=== Initializing Storage ===');
+      debugPrint('=== Initializing Storage ===');
       
       // First request permissions
-      print('Requesting storage permissions...');
+      debugPrint('Requesting storage permissions...');
       final hasPermission = await requestPermissions();
       if (!hasPermission) {
-        print('ERROR: Storage permission denied');
+        debugPrint('ERROR: Storage permission denied');
         return false;
       }
-      print('✓ Storage permission granted');
+      debugPrint('✓ Storage permission granted');
 
       // Get the projects folder
       final projectsDir = await getProjectsFolder();
       if (projectsDir == null) {
-        print('ERROR: Could not get projects folder');
+        debugPrint('ERROR: Could not get projects folder');
         return false;
       }
 
       // Check if folder exists
       final exists = await projectsDir.exists();
       if (exists) {
-        print('✓ LMT_PROJECTS folder already exists at: ${projectsDir.path}');
+        debugPrint('✓ LMT_PROJECTS folder already exists at: ${projectsDir.path}');
         return true;
       }
 
       // Create folder if it doesn't exist
-      print('Creating LMT_PROJECTS folder at: ${projectsDir.path}');
+      debugPrint('Creating LMT_PROJECTS folder at: ${projectsDir.path}');
       await projectsDir.create(recursive: true);
       
       // Verify creation
       if (await projectsDir.exists()) {
-        print('✓ Successfully created LMT_PROJECTS folder');
+        debugPrint('✓ Successfully created LMT_PROJECTS folder');
         return true;
       } else {
-        print('ERROR: Failed to create LMT_PROJECTS folder');
+        debugPrint('ERROR: Failed to create LMT_PROJECTS folder');
         return false;
       }
     } catch (e) {
-      print('ERROR: Exception during storage initialization: $e');
+      debugPrint('ERROR: Exception during storage initialization: $e');
       return false;
     }
   }
@@ -92,7 +93,7 @@ class StorageService {
           .map((file) => file.path.split('/').last)
           .toList();
     } catch (e) {
-      print('Error listing songs: $e');
+      debugPrint('Error listing songs: $e');
       return [];
     }
   }
@@ -106,7 +107,7 @@ class StorageService {
       final songFile = File('${projectsDir.path}/$songName');
       return songFile.path;
     } catch (e) {
-      print('Error getting song path: $e');
+      debugPrint('Error getting song path: $e');
       return null;
     }
   }

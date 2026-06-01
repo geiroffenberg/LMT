@@ -69,8 +69,9 @@ class ChainWindow extends StatelessWidget {
                             : item.phrase.toString().padLeft(2, '0');
                       case 1: // TR
                         if (item.transpose == 0) return '--';
-                        if (item.transpose <= 12)
+                        if (item.transpose <= 12) {
                           return '+${item.transpose.toString().padLeft(2, '0')}';
+                        }
                         // 88-99 → -12 to -01
                         return '-${(100 - item.transpose).toString().padLeft(2, '0')}';
                       default:
@@ -88,8 +89,8 @@ class ChainWindow extends StatelessWidget {
                   }
 
                   return Container(
-                    color: isPlaying  ? Colors.orange.withOpacity(0.25)
-                         : isSelected ? Colors.cyan.withOpacity(0.15)
+                    color: isPlaying  ? Colors.orange.withValues(alpha: 0.25)
+                         : isSelected ? Colors.cyan.withValues(alpha: 0.15)
                          : null,
                     child: Row(children: [
                     // Row number — tap to select/extend line selection

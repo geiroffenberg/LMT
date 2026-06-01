@@ -186,6 +186,12 @@ public:
     // Per-track send levels (8 tracks, all 0..1)
     void setTrackSends(int trackIdx, float rev, float del, float cho);
 
+    // Per-track dry level (0..1) — multiplied into the dry voice output
+    void setTrackLevel(int trackIdx, float level);
+
+    // Per-track mute (audio-thread atomic). Bypasses the track's dry + send paths.
+    void setTrackMute(int trackIdx, bool muted);
+
     // Per-instrument send levels (0..1); stacked on top of track sends
     void setInstrumentSends(int instrIdx, float rev, float del, float cho);
 
@@ -249,6 +255,10 @@ private:
     float mTrackReverbSend[8] = {};
     float mTrackDelaySend[8]  = {};
     float mTrackChorusSend[8] = {};
+
+    // Per-track dry gain + mute (atomic so UI thread can write without locking)
+    std::atomic<float> mTrackLevel[8];      // initialized to 1.0 in open()
+    std::atomic<bool>  mTrackMuted[8];      // initialized to false in open()
 
     // Per-instrument send levels (kMaxVoices instruments) — atomic for lock-free UI thread writes
     std::atomic<float> mInstrumentRevSend[kMaxVoices];

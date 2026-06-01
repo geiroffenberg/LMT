@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:path/path.dart' as path_lib;
@@ -17,7 +18,7 @@ class ProjectManager {
     try {
       final projectsDir = await StorageService.getProjectsFolder();
       if (projectsDir == null || !await projectsDir.exists()) {
-        print('Projects folder does not exist');
+        debugPrint('Projects folder does not exist');
         return null;
       }
 
@@ -29,7 +30,7 @@ class ProjectManager {
           .toList();
 
       if (folders.isEmpty) {
-        print('No project folders found');
+        debugPrint('No project folders found');
         return null;
       }
 
@@ -39,7 +40,7 @@ class ProjectManager {
 
       return folders.first;
     } catch (e) {
-      print('Error getting latest project: $e');
+      debugPrint('Error getting latest project: $e');
       return null;
     }
   }
@@ -49,13 +50,13 @@ class ProjectManager {
     try {
       final projectsDir = await StorageService.getProjectsFolder();
       if (projectsDir == null) {
-        print('ERROR: Could not get projects folder');
+        debugPrint('ERROR: Could not get projects folder');
         return null;
       }
 
       final projectDir = Directory('${projectsDir.path}/$projectName');
       if (await projectDir.exists()) {
-        print('Project folder already exists: ${projectDir.path}');
+        debugPrint('Project folder already exists: ${projectDir.path}');
         return projectDir;
       }
 
@@ -65,10 +66,10 @@ class ProjectManager {
       final samplesDir = Directory('${projectDir.path}/$samplesFolder');
       await samplesDir.create(recursive: true);
 
-      print('✓ Created project folder: ${projectDir.path}');
+      debugPrint('✓ Created project folder: ${projectDir.path}');
       return projectDir;
     } catch (e) {
-      print('ERROR creating project: $e');
+      debugPrint('ERROR creating project: $e');
       return null;
     }
   }
@@ -76,41 +77,38 @@ class ProjectManager {
   /// Save a TrackerModel to a project folder
   static Future<bool> saveProject(String projectName, TrackerModel model) async {
     try {
-      print('=== Saving Project: $projectName ===');
+      debugPrint('=== Saving Project: $projectName ===');
       
       final projectDir = await createProject(projectName);
       if (projectDir == null) {
-        print('ERROR: Failed to create project directory');
+        debugPrint('ERROR: Failed to create project directory');
         return false;
       }
 
-      // Copy samples and update model paths to be project-relative
+      // Copy samples into the project folder.  Build a path mapping but DO NOT
+      // mutate the live model — _modelToJson() uses just the basename anyway,
+      // and the model paths only need rewriting on LOAD, not on SAVE.
       final samplesUsed = _getSamplesInUse(model);
-      final samplesDir = Directory('${projectDir.path}/$samplesFolder');
-      final Map<String, String> sampleMapping = {}; // old path -> new path
-
-      for (final samplePath in samplesUsed) {
-        if (samplePath.isNotEmpty && await File(samplePath).exists()) {
-          try {
-            final sampleName = path_lib.basename(samplePath);
-            final destPath = '${samplesDir.path}/$sampleName';
-            
-            // Copy file if it doesn't already exist
-            if (!await File(destPath).exists()) {
-              await File(samplePath).copy(destPath);
-              print('✓ Copied sample: $sampleName');
-            }
-            sampleMapping[samplePath] = destPath;
-          } catch (e) {
-            print('Warning: Could not copy sample: $e');
-          }
-        }
+      final samplesDir = Directory(path_lib.join(projectDir.path, samplesFolder));
+      if (!await samplesDir.exists()) {
+        await samplesDir.create(recursive: true);
       }
 
-      // Update model's instrument sample paths to point to project folder
-      for (final inst in model.instruments) {
-        if (inst.sample.isNotEmpty && sampleMapping.containsKey(inst.sample)) {
-          inst.sample = sampleMapping[inst.sample]!;
+      for (final samplePath in samplesUsed) {
+        if (samplePath.isEmpty) continue;
+        try {
+          final srcFile = File(samplePath);
+          if (!await srcFile.exists()) continue;
+          final sampleName = path_lib.basename(samplePath);
+          final destPath = path_lib.join(samplesDir.path, sampleName);
+          // Skip if source and dest are the same file (already in project)
+          if (path_lib.equals(samplePath, destPath)) continue;
+          if (!await File(destPath).exists()) {
+            await srcFile.copy(destPath);
+            debugPrint('✓ Copied sample: $sampleName');
+          }
+        } catch (e) {
+          debugPrint('Warning: Could not copy sample: $e');
         }
       }
 
@@ -119,17 +117,17 @@ class ProjectManager {
       final jsonString = jsonEncode(songData);
 
       // Write song file
-      final songFile = File('${projectDir.path}/$songFileName');
+      final songFile = File(path_lib.join(projectDir.path, songFileName));
       await songFile.writeAsString(jsonString);
-      print('✓ Saved song data to: ${songFile.path}');
+      debugPrint('✓ Saved song data to: ${songFile.path}');
 
       // Update model's current project info
       model.setCurrentProject(projectName, projectDir.path);
 
-      print('✓ Project saved successfully');
+      debugPrint('✓ Project saved successfully');
       return true;
     } catch (e) {
-      print('ERROR saving project: $e');
+      debugPrint('ERROR saving project: $e');
       return false;
     }
   }
@@ -137,22 +135,32 @@ class ProjectManager {
   /// Load a project from a project folder
   static Future<TrackerModel?> loadProject(Directory projectDir) async {
     try {
-      print('=== Loading Project: ${projectDir.path} ===');
+      debugPrint('=== Loading Project: ${projectDir.path} ===');
       
-      final songFile = File('${projectDir.path}/$songFileName');
+      final songFile = File(path_lib.join(projectDir.path, songFileName));
       if (!await songFile.exists()) {
-        print('ERROR: song.lmt file not found in project');
+        debugPrint('ERROR: song.lmt file not found in project');
         return null;
       }
 
       final jsonString = await songFile.readAsString();
-      final jsonData = jsonDecode(jsonString) as Map<String, dynamic>;
+      // Guard against oversize / hostile files (10 MB cap)
+      if (jsonString.length > 10 * 1024 * 1024) {
+        debugPrint('ERROR: song.lmt exceeds 10 MB safety cap');
+        return null;
+      }
+      final decoded = jsonDecode(jsonString);
+      if (decoded is! Map<String, dynamic>) {
+        debugPrint('ERROR: song.lmt root is not a JSON object');
+        return null;
+      }
+      final jsonData = decoded;
 
       final model = _jsonToModel(jsonData, projectDir);
-      print('✓ Project loaded successfully');
+      debugPrint('✓ Project loaded successfully');
       return model;
     } catch (e) {
-      print('ERROR loading project: $e');
+      debugPrint('ERROR loading project: $e');
       return null;
     }
   }
@@ -172,7 +180,7 @@ class ProjectManager {
           .where((d) => path_lib.basename(d.path) != autoSaveName) // Hide autosave slot
           .toList();
     } catch (e) {
-      print('Error listing projects: $e');
+      debugPrint('Error listing projects: $e');
       return [];
     }
   }
@@ -247,6 +255,8 @@ class ProjectManager {
             'chorusSend': channel.chorusSend,
           }
       ],
+      'mutedTracks':  model.mutedTracks.toList(),
+      'soloedTracks': model.soloedTracks.toList(),
     };
   }
 
@@ -254,7 +264,9 @@ class ProjectManager {
   /// Resolves sample filenames to project folder paths
   static TrackerModel _jsonToModel(Map<String, dynamic> json, [Directory? projectDir]) {
     final model = TrackerModel();
-    final samplesDir = projectDir != null ? '${projectDir.path}/$samplesFolder' : '';
+    final samplesDir = projectDir != null
+        ? path_lib.join(projectDir.path, samplesFolder)
+        : '';
 
     // Load BPM / LPB
     model.song.bpm = json['bpm'] as int? ?? 120;
@@ -341,7 +353,7 @@ class ProjectManager {
           // Resolve sample filename to project folder path
           final sampleFilename = instData['sample'] as String? ?? '';
           if (sampleFilename.isNotEmpty && samplesDir.isNotEmpty) {
-            model.instruments[i].sample = '$samplesDir/$sampleFilename';
+            model.instruments[i].sample = path_lib.join(samplesDir, sampleFilename);
           } else {
             model.instruments[i].sample = sampleFilename;
           }
@@ -390,6 +402,19 @@ class ProjectManager {
       }
     }
 
+    if (json['mutedTracks'] is List) {
+      for (final v in json['mutedTracks'] as List) {
+        final i = (v as num?)?.toInt();
+        if (i != null && i >= 0 && i < 8) model.mutedTracks.add(i);
+      }
+    }
+    if (json['soloedTracks'] is List) {
+      for (final v in json['soloedTracks'] as List) {
+        final i = (v as num?)?.toInt();
+        if (i != null && i >= 0 && i < 8) model.soloedTracks.add(i);
+      }
+    }
+
     return model;
   }
 
@@ -432,7 +457,7 @@ class ProjectManager {
     final samplePathStr = json['samplePath'] as String?;
     if (samplePathStr != null && samplePathStr.isNotEmpty && samplesDir != null && samplesDir.isNotEmpty) {
       final filename = path_lib.basename(samplePathStr);
-      sampler.samplePath = '$samplesDir/$filename';
+      sampler.samplePath = path_lib.join(samplesDir, filename);
     } else {
       sampler.samplePath = samplePathStr;
     }

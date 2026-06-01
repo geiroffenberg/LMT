@@ -11,6 +11,7 @@ import 'windows/phrase_window.dart';
 import 'windows/instrument_window.dart';
 import 'windows/mixer_window.dart';
 import 'windows/sampler_window.dart';
+import 'windows/manual_window.dart';
 import 'services/project_manager.dart';
 import 'audio/audio_engine.dart';
 
@@ -91,6 +92,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         await NativeAudioEngine.loadSample(i, samplePath);
       }
     }
+    // Push current mixer + mute state to the engine so the audio side
+    // matches the model after init/resume/load.
+    _syncMixerSendsToNative();
+    _syncTrackMutesToNative();
   }
 
   // Autosave disabled — use SAVE SONG from the menu
@@ -128,6 +133,35 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         ch.delaySend  / 99.0,
         ch.chorusSend / 99.0,
       );
+      NativeAudioEngine.setTrackLevel(i, ch.level / 99.0);
+    }
+  }
+
+  /// Push effective mute state (mute + solo combined) for all 8 tracks.
+  void _syncTrackMutesToNative() {
+    for (int i = 0; i < 8; i++) {
+      NativeAudioEngine.setTrackMute(i, !model.isTrackAudible(i));
+    }
+  }
+
+  /// Rebuild and re-enqueue rows from the current playhead so changes to
+  /// mute/solo (or other "structural" edits) take effect on the next row.
+  Future<void> _reenqueueFromPlayhead() async {
+    if (!model.isPlaying) return;
+    if (_playingPhraseMode) {
+      final rows = model.buildPhraseRows(model.activePhraseIdx);
+      if (rows.isEmpty) return;
+      await NativeAudioEngine.clearQueue();
+      await NativeAudioEngine.enqueueAllRows(model.isLooping, rows);
+      _phraseLen = rows.length;
+    } else {
+      final data = model.buildPlaybackData(startRow: model.playheadRow);
+      if (data.rows.isEmpty) return;
+      await NativeAudioEngine.clearQueue();
+      await NativeAudioEngine.enqueueAllRows(model.isLooping, data.rows);
+      _songRowMap  = data.songRowMap;
+      _chainRowMap = data.chainRowMap;
+      _currentStepIndex = 0;
     }
   }
 
@@ -282,15 +316,8 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     }
   }
 
-  void _handleKey(RawKeyEvent event) {
-    if (event is RawKeyDownEvent) {
-      final isArrowUp = event.isKeyPressed(LogicalKeyboardKey.arrowUp);
-      final isArrowDown = event.isKeyPressed(LogicalKeyboardKey.arrowDown);
-      final isTab = event.isKeyPressed(LogicalKeyboardKey.tab);
-      final isEnter = event.isKeyPressed(LogicalKeyboardKey.enter);
-      final isEscape = event.isKeyPressed(LogicalKeyboardKey.escape);
-      final isBackspace = event.isKeyPressed(LogicalKeyboardKey.backspace);
-
+  void _handleKey(KeyEvent event) {
+    if (event is KeyDownEvent || event is KeyRepeatEvent) {
       if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
         setState(() {
           model.cursorRow = (model.cursorRow - 1).clamp(0, 98);
@@ -310,6 +337,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
             setState(() {
               int bpm = int.tryParse(model.editBuffer) ?? 120;
               bpm = bpm.clamp(60, 300);
+              model.pushUndo();
               model.song.bpm = bpm;
               model.editingBPM = false;
               model.inEditMode = false;
@@ -317,6 +345,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
             });
           } else {
             setState(() {
+              if (model.editBuffer.isNotEmpty) model.pushUndo();
               model.applyEdit(model.editBuffer);
               if (model.currentWindow == 4) _syncMixerSendsToNative();
             });
@@ -361,9 +390,9 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
 
   @override
   Widget build(BuildContext context) {
-    return RawKeyboardListener(
+    return KeyboardListener(
       focusNode: _keyListenerFocusNode,
-      onKey: _handleKey,
+      onKeyEvent: _handleKey,
       child: Scaffold(
         backgroundColor: Colors.black,
         body: SafeArea(
@@ -451,43 +480,92 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                       ...List.generate(8, (ch) {
                         final level = model.mixerChannels[ch].level;
                         final audioLevel = model.audioLevels[ch];
+                        final bool isMuted  = model.mutedTracks.contains(ch);
+                        final bool isSoloed = model.soloedTracks.contains(ch);
                         return Expanded(
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              // LED meter: 6 blocks × 5 dB, range −30..0 dB
-                              Builder(builder: (context) {
-                                final double dB = audioLevel > 1e-6
-                                    ? 20.0 * math.log(audioLevel) / math.ln10
-                                    : -60.0;
-                                return Container(
-                                  width: meterWidth,
-                                  height: 40,
-                                  decoration: BoxDecoration(
-                                    border: Border.all(color: Colors.white, width: 1),
-                                    color: Colors.black,
-                                  ),
-                                  padding: const EdgeInsets.all(2),
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.end,
-                                    children: List.generate(6, (i) {
-                                      // i=0 = top block (−5..0 dB), i=5 = bottom (−30..−25 dB)
-                                      final int blockIdx = 5 - i;
-                                      final double thresh = -30.0 + blockIdx * 5.0;
-                                      final bool lit = dB >= thresh;
-                                      final bool isHot = blockIdx == 5;
-                                      return Container(
-                                        width: double.infinity,
-                                        height: 5,
-                                        margin: EdgeInsets.only(bottom: i < 5 ? 1.0 : 0.0),
-                                        color: lit
-                                            ? (isHot ? Colors.orange : kGreen)
-                                            : const Color(0xFF1A1A1A),
-                                      );
-                                    }),
-                                  ),
-                                );
-                              }),
+                              // LED meter: 6 blocks × 5 dB, range −30..0 dB.
+                              // Double-tap = solo, long-press = mute.
+                              GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onDoubleTap: () async {
+                                  model.toggleSolo(ch);
+                                  setState(() {});
+                                  _syncTrackMutesToNative();
+                                },
+                                onLongPress: () async {
+                                  model.toggleMute(ch);
+                                  setState(() {});
+                                  _syncTrackMutesToNative();
+                                },
+                                child: Builder(builder: (context) {
+                                  final double dB = audioLevel > 1e-6
+                                      ? 20.0 * math.log(audioLevel) / math.ln10
+                                      : -60.0;
+                                  final Color borderColor = isSoloed
+                                      ? Colors.yellow
+                                      : isMuted
+                                          ? Colors.red
+                                          : Colors.white;
+                                  return Container(
+                                    width: meterWidth,
+                                    height: 40,
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: borderColor, width: isSoloed || isMuted ? 2 : 1),
+                                      color: Colors.black,
+                                    ),
+                                    padding: const EdgeInsets.all(2),
+                                    child: Stack(
+                                      children: [
+                                        Column(
+                                          mainAxisAlignment: MainAxisAlignment.end,
+                                          children: List.generate(6, (i) {
+                                            // i=0 = top block (−5..0 dB), i=5 = bottom (−30..−25 dB)
+                                            final int blockIdx = 5 - i;
+                                            final double thresh = -30.0 + blockIdx * 5.0;
+                                            final bool lit = !isMuted && dB >= thresh;
+                                            final bool isHot = blockIdx == 5;
+                                            return Container(
+                                              width: double.infinity,
+                                              height: 5,
+                                              margin: EdgeInsets.only(bottom: i < 5 ? 1.0 : 0.0),
+                                              color: lit
+                                                  ? (isHot ? Colors.orange : kGreen)
+                                                  : const Color(0xFF1A1A1A),
+                                            );
+                                          }),
+                                        ),
+                                        if (isSoloed)
+                                          const Positioned(
+                                            top: 0, left: 0, right: 0,
+                                            child: Center(
+                                              child: Text('S',
+                                                style: TextStyle(
+                                                  color: Colors.yellow,
+                                                  fontSize: 10,
+                                                  fontWeight: FontWeight.bold),
+                                              ),
+                                            ),
+                                          )
+                                        else if (isMuted)
+                                          const Positioned(
+                                            top: 0, left: 0, right: 0,
+                                            child: Center(
+                                              child: Text('M',
+                                                style: TextStyle(
+                                                  color: Colors.red,
+                                                  fontSize: 10,
+                                                  fontWeight: FontWeight.bold),
+                                              ),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  );
+                                }),
+                              ),
                               const SizedBox(height: 2),
                               // Level number
                               GestureDetector(
@@ -594,6 +672,68 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                         ),
                       ),
                       const SizedBox(width: 16),
+                      // Undo
+                      GestureDetector(
+                        onTap: () {
+                          if (!model.canUndo) return;
+                          setState(() {
+                            model.undo();
+                          });
+                          _syncMixerSendsToNative();
+                          _syncTrackMutesToNative();
+                          _reenqueueFromPlayhead();
+                        },
+                        child: Container(
+                          width: 32,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            border: Border.all(
+                              color: model.canUndo ? Colors.white : Colors.white24,
+                              width: 2,
+                            ),
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            '↶',
+                            style: trackerStyle(
+                              size: fontSize,
+                              color: model.canUndo ? Colors.white : Colors.white24,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      // Redo
+                      GestureDetector(
+                        onTap: () {
+                          if (!model.canRedo) return;
+                          setState(() {
+                            model.redo();
+                          });
+                          _syncMixerSendsToNative();
+                          _syncTrackMutesToNative();
+                          _reenqueueFromPlayhead();
+                        },
+                        child: Container(
+                          width: 32,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            border: Border.all(
+                              color: model.canRedo ? Colors.white : Colors.white24,
+                              width: 2,
+                            ),
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            '↷',
+                            style: trackerStyle(
+                              size: fontSize,
+                              color: model.canRedo ? Colors.white : Colors.white24,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
                       GestureDetector(
                         onTap: () {
                           setState(() {
@@ -649,7 +789,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   }
 
   Widget _buildProjectMenu() {
-    const menuItems = ['SAVE SONG', 'SAVE AS...', 'NEW SONG', 'LOAD SONG', 'SONG SETTINGS', 'FOLDER'];
+    const menuItems = ['SAVE SONG', 'SAVE AS...', 'NEW SONG', 'LOAD SONG', 'SONG SETTINGS', 'MANUAL', 'FOLDER'];
 
     return Positioned(
       right: 8,
@@ -736,17 +876,19 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       case 'SAVE SONG':
         final projectName = model.currentProjectName;
         final saveOk = await ProjectManager.saveProject(projectName, model);
+        if (!mounted) return;
         setState(() {});
-        if (mounted) _showStatusSnackBar(saveOk, saveOk ? 'Saved: $projectName' : 'Save FAILED — check logs');
+        _showStatusSnackBar(saveOk, saveOk ? 'Saved: $projectName' : 'Save FAILED — check logs');
         break;
 
       case 'SAVE AS...':
         final newName = await _showProjectNameDialog('SAVE AS');
         if (newName != null && newName.isNotEmpty) {
           final saveOk = await ProjectManager.saveProject(newName, model);
+          if (!mounted) return;
           if (saveOk) model.setCurrentProject(newName, '');
           setState(() {});
-          if (mounted) _showStatusSnackBar(saveOk, saveOk ? 'Saved as: $newName' : 'Save FAILED — check logs');
+          _showStatusSnackBar(saveOk, saveOk ? 'Saved as: $newName' : 'Save FAILED — check logs');
         }
         break;
 
@@ -756,8 +898,9 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
           model.newSong();
           model.setCurrentProject(songName, '');
           final saveOk = await ProjectManager.saveProject(songName, model);
+          if (!mounted) return;
           setState(() {});
-          if (mounted) _showStatusSnackBar(saveOk, saveOk ? 'Created: $songName' : 'Save FAILED — check logs');
+          _showStatusSnackBar(saveOk, saveOk ? 'Created: $songName' : 'Save FAILED — check logs');
         }
         break;
 
@@ -769,9 +912,13 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         _showSongSettingsDialog();
         break;
 
+      case 'MANUAL':
+        showManual(context);
+        break;
+
       case 'FOLDER':
         // TODO: Browse projects folder
-        print('Folder clicked');
+        debugPrint('Folder clicked');
         break;
     }
   }
@@ -876,6 +1023,9 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       _chainRowMap = [];
       _phraseLen = 0;
     });
+    model.clearUndoHistory();
+    _syncMixerSendsToNative();
+    _syncTrackMutesToNative();
   }
 
   Future<void> _showSongSettingsDialog() async {
@@ -1126,12 +1276,16 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                           if (item == 'X') {
                             model.clearLineSelection();
                           } else if (item == '↑') {
+                            model.pushUndo();
                             model.moveSelectionUp();
                           } else if (item == '↓') {
+                            model.pushUndo();
                             model.moveSelectionDown();
                           } else if (item == '2x') {
+                            model.pushUndo();
                             model.duplicateSelection();
                           } else if (item == 'DEL') {
+                            model.pushUndo();
                             model.clearSelectedLines();
                             model.clearLineSelection();
                           }
@@ -1168,12 +1322,15 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
 
     // Song window: REP + DEL
     // Phrase note column: OFF + END + DEL + X
-    // Other: CPY + CUT + PST + DEL + X
+    // Phrase other columns: CPY + CUT + PST + DEL + X
+    // Chain / Instrument / Mixer: just DEL + X (+/- in line 1 is enough)
     final line2Items = model.currentWindow == 0
         ? ['REP', 'DEL', 'X']
-        : isNoteColumn
-            ? ['OFF', 'END', 'DEL', 'X']
-            : ['CPY', 'CUT', 'PST', 'DEL', 'X'];
+        : model.currentWindow == 2
+            ? (isNoteColumn
+                ? ['OFF', 'END', 'DEL', 'X']
+                : ['CPY', 'CUT', 'PST', 'DEL', 'X'])
+            : ['DEL', 'X'];
 
     return Positioned(
       bottom: 0,
@@ -1202,6 +1359,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                               model.editMenuVisible = false;
                             });
                           } else {
+                            model.pushUndo();
                             model.performMenuAction(item);
                             if (model.currentWindow == 4) _syncMixerSendsToNative();
                             setState(() {});
@@ -1235,6 +1393,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                               model.editMenuVisible = false;
                             });
                           } else {
+                            model.pushUndo();
                             model.performMenuAction(item);
                             if (model.currentWindow == 4) _syncMixerSendsToNative();
                             setState(() {});

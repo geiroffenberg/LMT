@@ -132,6 +132,173 @@ class TrackerModel {
   List<double> audioLevels = List.filled(8, 0.0); // linear peak 0..1 per channel
   double masterPeak = 0.0;                         // post-limiter master bus peak 0..1
 
+  // Per-track mute / solo (M8-style: solo wins). Affects only newly enqueued rows.
+  final Set<int> mutedTracks  = <int>{};
+  final Set<int> soloedTracks = <int>{};
+
+  /// Returns true if track [t] should be audible given current mute/solo state.
+  bool isTrackAudible(int t) {
+    if (soloedTracks.isNotEmpty) return soloedTracks.contains(t);
+    return !mutedTracks.contains(t);
+  }
+
+  /// Toggle solo for track [t]. If t was the only soloed track, clears all solos.
+  void toggleSolo(int t) {
+    if (soloedTracks.contains(t)) {
+      soloedTracks.remove(t);
+    } else {
+      soloedTracks.add(t);
+    }
+  }
+
+  /// Toggle mute for track [t].
+  void toggleMute(int t) {
+    if (mutedTracks.contains(t)) {
+      mutedTracks.remove(t);
+    } else {
+      mutedTracks.add(t);
+    }
+  }
+
+  // ── Undo / Redo ──────────────────────────────────────────────────────────
+  // Snapshots are lightweight Map clones of the editable tracker grids.
+  // Cap at 64 snapshots; oldest dropped first.
+  static const int _maxUndo = 64;
+  final List<Map<String, dynamic>> _undoStack = [];
+  final List<Map<String, dynamic>> _redoStack = [];
+
+  bool get canUndo => _undoStack.isNotEmpty;
+  bool get canRedo => _redoStack.isNotEmpty;
+
+  /// Snapshot the currently editable state (song grid, chains, phrases,
+  /// instruments [non-sampler fields], mixer, masterFx). Call BEFORE mutating.
+  /// Clears the redo stack — any new edit invalidates redo history.
+  void pushUndo() {
+    _undoStack.add(_snapshot());
+    if (_undoStack.length > _maxUndo) _undoStack.removeAt(0);
+    _redoStack.clear();
+  }
+
+  void undo() {
+    if (_undoStack.isEmpty) return;
+    _redoStack.add(_snapshot());
+    _restore(_undoStack.removeLast());
+  }
+
+  void redo() {
+    if (_redoStack.isEmpty) return;
+    _undoStack.add(_snapshot());
+    _restore(_redoStack.removeLast());
+  }
+
+  void clearUndoHistory() {
+    _undoStack.clear();
+    _redoStack.clear();
+  }
+
+  Map<String, dynamic> _snapshot() {
+    return {
+      'songChains': [for (final r in song.chains) List<int>.from(r)],
+      'bpm': song.bpm,
+      'lpb': song.lpb,
+      'chains': [
+        for (final ch in chains)
+          [
+            for (final it in ch.items)
+              {
+                'p': it.phrase,
+                't': it.transpose,
+                'fx': [for (final f in it.fx) [f.name, f.value]],
+              }
+          ]
+      ],
+      'phrases': [
+        for (final ph in phrases)
+          [
+            for (final st in ph.steps)
+              {
+                'n': st.note,
+                'i': st.instrument,
+                'v': st.volume,
+                'fx': [for (final f in st.fx) [f.name, f.value]],
+              }
+          ]
+      ],
+      'instruments': [
+        for (final inst in instruments)
+          {
+            'filter': inst.filter,
+            'resonance': inst.resonance,
+            'treble': inst.treble,
+            'mid': inst.mid,
+            'bass': inst.bass,
+          }
+      ],
+      'mixer': [
+        for (final ch in mixerChannels)
+          [ch.level, ch.reverbSend, ch.delaySend, ch.chorusSend]
+      ],
+    };
+  }
+
+  void _restore(Map<String, dynamic> s) {
+    final sc = s['songChains'] as List;
+    for (int r = 0; r < 99 && r < sc.length; r++) {
+      final row = sc[r] as List;
+      for (int c = 0; c < 8 && c < row.length; c++) {
+        song.chains[r][c] = row[c] as int;
+      }
+    }
+    song.bpm = s['bpm'] as int? ?? song.bpm;
+    song.lpb = s['lpb'] as int? ?? song.lpb;
+    final ch = s['chains'] as List;
+    for (int i = 0; i < 99 && i < ch.length; i++) {
+      final items = ch[i] as List;
+      for (int j = 0; j < 99 && j < items.length; j++) {
+        final m = items[j] as Map;
+        chains[i].items[j].phrase    = m['p'] as int;
+        chains[i].items[j].transpose = m['t'] as int;
+        final fx = m['fx'] as List;
+        for (int k = 0; k < chains[i].items[j].fx.length && k < fx.length; k++) {
+          chains[i].items[j].fx[k].name  = (fx[k] as List)[0] as String;
+          chains[i].items[j].fx[k].value = (fx[k] as List)[1] as int;
+        }
+      }
+    }
+    final ph = s['phrases'] as List;
+    for (int i = 0; i < 99 && i < ph.length; i++) {
+      final steps = ph[i] as List;
+      for (int j = 0; j < 99 && j < steps.length; j++) {
+        final m = steps[j] as Map;
+        phrases[i].steps[j].note       = m['n'] as int;
+        phrases[i].steps[j].instrument = m['i'] as int;
+        phrases[i].steps[j].volume     = m['v'] as int;
+        final fx = m['fx'] as List;
+        for (int k = 0; k < phrases[i].steps[j].fx.length && k < fx.length; k++) {
+          phrases[i].steps[j].fx[k].name  = (fx[k] as List)[0] as String;
+          phrases[i].steps[j].fx[k].value = (fx[k] as List)[1] as int;
+        }
+      }
+    }
+    final ins = s['instruments'] as List;
+    for (int i = 0; i < 99 && i < ins.length; i++) {
+      final m = ins[i] as Map;
+      instruments[i].filter    = m['filter']    as int;
+      instruments[i].resonance = m['resonance'] as int;
+      instruments[i].treble    = m['treble']    as int;
+      instruments[i].mid       = m['mid']       as int;
+      instruments[i].bass      = m['bass']      as int;
+    }
+    final mx = s['mixer'] as List;
+    for (int i = 0; i < 8 && i < mx.length; i++) {
+      final row = mx[i] as List;
+      mixerChannels[i].level      = row[0] as int;
+      mixerChannels[i].reverbSend = row[1] as int;
+      mixerChannels[i].delaySend  = row[2] as int;
+      mixerChannels[i].chorusSend = row[3] as int;
+    }
+  }
+
   // --- Song playback position ---
   int playheadRow = 0;        // which song row is currently playing
   int playheadChainRow = 0;   // which chain slot (row) is currently playing
@@ -264,9 +431,38 @@ class TrackerModel {
     editMenuCol = -1;
     editMenuWindow = -1;
     copyBuffer = '';
+
+    mutedTracks.clear();
+    soloedTracks.clear();
+    clearUndoHistory();
   }
 
-  /// Replicate the selected chain: copy it to the next free chain number and update the cell
+  /// Returns true if phrase [idx] (0-based) is completely empty.
+  bool _isPhraseEmpty(int idx) =>
+      phrases[idx].steps.every((s) => s.note == PhraseStep.noteNone);
+
+  /// Deep-copy phrase [srcIdx] → [dstIdx] (both 0-based).
+  void _copyPhrase(int srcIdx, int dstIdx) {
+    final src = phrases[srcIdx];
+    final dst = phrases[dstIdx];
+    dst.length = src.length;
+    for (int i = 0; i < src.steps.length && i < dst.steps.length; i++) {
+      final s = src.steps[i];
+      final d = dst.steps[i];
+      d.note       = s.note;
+      d.instrument = s.instrument;
+      d.volume     = s.volume;
+      for (int f = 0; f < s.fx.length && f < d.fx.length; f++) {
+        d.fx[f].name  = s.fx[f].name;
+        d.fx[f].value = s.fx[f].value;
+      }
+    }
+  }
+
+  /// Replicate the selected chain: copy it to the next free chain number and update the cell.
+  /// M8-style: each phrase referenced by the source chain is also duplicated into a
+  /// new empty phrase number, and the new chain's slots are remapped to those copies.
+  /// Phrases listed multiple times in the source chain are deduplicated (one copy each).
   void replicateChain() {
     if (currentWindow != 0) return; // Only for Song window
 
@@ -276,32 +472,36 @@ class TrackerModel {
     final sourceIdx = sourceChainNum - 1;
 
     // Find the next free chain number (one that has no phrase data)
-    int targetChainNum = -1;
-    for (int i = 1; i <= 99; i++) {
-      bool isFree = true;
-      for (int j = 0; j < chains[i - 1].items.length; j++) {
-        if (chains[i - 1].items[j].phrase != 0) {
-          isFree = false;
-          break;
-        }
-      }
-      if (isFree) {
-        targetChainNum = i;
-        break;
-      }
-    }
-
+    final targetChainNum = firstAvailableChain();
     if (targetChainNum <= 0) return; // No free chain available
-
     final targetIdx = targetChainNum - 1;
 
-    // Deep copy the source chain to the target
+    // Build a map of original phrase number → new (duplicated) phrase number.
+    // Allocate one new empty phrase per unique non-zero phrase ref in the source.
+    final Map<int, int> phraseRemap = {};
+    final Set<int> reserved = {}; // phrase indices we've already used as targets
+    for (final item in chains[sourceIdx].items) {
+      final pn = item.phrase;
+      if (pn <= 0 || phraseRemap.containsKey(pn)) continue;
+      int newPn = -1;
+      for (int i = 0; i < 99; i++) {
+        if (reserved.contains(i)) continue;
+        if (_isPhraseEmpty(i)) { newPn = i + 1; break; }
+      }
+      if (newPn == -1) break; // out of free phrase slots — keep original ref for the rest
+      reserved.add(newPn - 1);
+      _copyPhrase(pn - 1, newPn - 1);
+      phraseRemap[pn] = newPn;
+    }
+
+    // Deep copy chain items, remapping phrase refs through the map.
     for (int i = 0; i < chains[sourceIdx].items.length; i++) {
       final srcItem = chains[sourceIdx].items[i];
-      chains[targetIdx].items[i].phrase = srcItem.phrase;
+      final newPhrase = phraseRemap[srcItem.phrase] ?? srcItem.phrase;
+      chains[targetIdx].items[i].phrase    = newPhrase;
       chains[targetIdx].items[i].transpose = srcItem.transpose;
       for (int f = 0; f < srcItem.fx.length; f++) {
-        chains[targetIdx].items[i].fx[f].name = srcItem.fx[f].name;
+        chains[targetIdx].items[i].fx[f].name  = srcItem.fx[f].name;
         chains[targetIdx].items[i].fx[f].value = srcItem.fx[f].value;
       }
     }
@@ -1045,7 +1245,7 @@ class TrackerModel {
 
           final noteData = <int>[];
           for (int t = 0; t < 8; t++) {
-            if (trackItems[t].isEmpty) {
+            if (trackItems[t].isEmpty || !isTrackAudible(t)) {
               noteData.addAll([-1, -1, -1, 0, 0, 0, 0, 0, 0]); // silent + no FX
               continue;
             }
@@ -1084,8 +1284,9 @@ class TrackerModel {
             // BPM/LPB already consumed above; handle VOL/PAN/sends here.
             int? chainVol, chainPan, chainSnr, chainSnd, chainSnc;
             for (final cfx in ci.fx) {
-              if (cfx.name == 'VOL')      chainVol = cfx.value;
-              else if (cfx.name == 'PAN') chainPan = cfx.value;
+              if (cfx.name == 'VOL') {
+                chainVol = cfx.value;
+              } else if (cfx.name == 'PAN') chainPan = cfx.value;
               else if (cfx.name == 'SNR') chainSnr = cfx.value;
               else if (cfx.name == 'SND') chainSnd = cfx.value;
               else if (cfx.name == 'SNC') chainSnc = cfx.value;

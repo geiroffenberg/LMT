@@ -77,6 +77,12 @@ bool AudioEngine::open() {
         mInstrumentLoopMode[i].store(0,    std::memory_order_relaxed);
     }
 
+    // Initialize per-track dry gain (unity) and mute flags (off)
+    for (int t = 0; t < 8; ++t) {
+        mTrackLevel[t].store(1.0f, std::memory_order_relaxed);
+        mTrackMuted[t].store(false, std::memory_order_relaxed);
+    }
+
     return true;
 }
 
@@ -735,6 +741,19 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         const float delSend = voice.delaySend;
         const float choSend = voice.chorusSend;
 
+        // Per-track dry+send gain (mute kills both dry and sends; level only scales dry).
+        // Reading atomics once per voice/buffer is cheap and avoids per-sample loads.
+        float trackDryGain  = 1.0f;
+        float trackSendGain = 1.0f;
+        if (voice.trackIdx >= 0 && voice.trackIdx < 8) {
+            if (mTrackMuted[voice.trackIdx].load(std::memory_order_relaxed)) {
+                trackDryGain  = 0.0f;
+                trackSendGain = 0.0f;
+            } else {
+                trackDryGain = mTrackLevel[voice.trackIdx].load(std::memory_order_relaxed);
+            }
+        }
+
         // Precompute HP/LP Chamberlin SVF coefficients (log-scale freq mapping)
         // HP: hpCutoff 0=bypass (20Hz), 1=max cut (20kHz)
         // LP: lpCutoff 1=bypass (20kHz), 0=max cut (20Hz)
@@ -914,16 +933,16 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
             float sampR = samp * std::sin(angle);
 
             // Accumulate into dry and effect send buffers
-            mDryL[i] += sampL;
-            mDryR[i] += sampR;
-            mRevSendL[i] += sampL * revSend;
-            mRevSendR[i] += sampR * revSend;
-            mDelSendL[i] += sampL * delSend;
-            mDelSendR[i] += sampR * delSend;
-            mChoSendL[i] += sampL * choSend;
-            mChoSendR[i] += sampR * choSend;
+            mDryL[i] += sampL * trackDryGain;
+            mDryR[i] += sampR * trackDryGain;
+            mRevSendL[i] += sampL * revSend * trackSendGain;
+            mRevSendR[i] += sampR * revSend * trackSendGain;
+            mDelSendL[i] += sampL * delSend * trackSendGain;
+            mDelSendR[i] += sampR * delSend * trackSendGain;
+            mChoSendL[i] += sampL * choSend * trackSendGain;
+            mChoSendR[i] += sampR * choSend * trackSendGain;
 
-            const float pkSamp = std::max(std::abs(sampL), std::abs(sampR));
+            const float pkSamp = std::max(std::abs(sampL), std::abs(sampR)) * trackDryGain;
             if (pkSamp > voicePeak) voicePeak = pkSamp;
         }
 
@@ -1280,6 +1299,16 @@ void AudioEngine::setTrackSends(int trackIdx, float rev, float del, float cho) {
     mTrackChorusSend[trackIdx] = cho;
 }
 
+void AudioEngine::setTrackLevel(int trackIdx, float level) {
+    if (trackIdx < 0 || trackIdx >= 8) return;
+    mTrackLevel[trackIdx].store(std::clamp(level, 0.0f, 1.0f), std::memory_order_relaxed);
+}
+
+void AudioEngine::setTrackMute(int trackIdx, bool muted) {
+    if (trackIdx < 0 || trackIdx >= 8) return;
+    mTrackMuted[trackIdx].store(muted, std::memory_order_relaxed);
+}
+
 void AudioEngine::setInstrumentSends(int instrIdx, float rev, float del, float cho) {
     if (instrIdx < 0 || instrIdx >= kMaxVoices) return;
     // Atomic stores — no mutex needed; audio thread reads these atomically
@@ -1440,6 +1469,20 @@ Java_com_example_lmt_AudioEnginePlugin_nativeSetTrackSends(JNIEnv *env, jobject 
                                                              jint trackIdx, jfloat rev, jfloat del, jfloat cho) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->setTrackSends(static_cast<int>(trackIdx), rev, del, cho);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetTrackLevel(JNIEnv *env, jobject obj, jlong handle,
+                                                             jint trackIdx, jfloat level) {
+    auto* engine = reinterpret_cast<AudioEngine*>(handle);
+    engine->setTrackLevel(static_cast<int>(trackIdx), level);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_lmt_AudioEnginePlugin_nativeSetTrackMute(JNIEnv *env, jobject obj, jlong handle,
+                                                            jint trackIdx, jboolean muted) {
+    auto* engine = reinterpret_cast<AudioEngine*>(handle);
+    engine->setTrackMute(static_cast<int>(trackIdx), muted == JNI_TRUE);
 }
 
 JNIEXPORT jfloatArray JNICALL

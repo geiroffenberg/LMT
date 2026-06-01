@@ -162,6 +162,18 @@ class AudioEnginePlugin(private val context: Context) {
                     nativeSetTrackSends(nativeHandle, trackIdx, rev, del, cho)
                     result.success(true)
                 }
+                "setTrackLevel" -> {
+                    val trackIdx = call.argument<Int>("trackIdx") ?: 0
+                    val level = call.argument<Double>("level")?.toFloat() ?: 1f
+                    nativeSetTrackLevel(nativeHandle, trackIdx, level)
+                    result.success(true)
+                }
+                "setTrackMute" -> {
+                    val trackIdx = call.argument<Int>("trackIdx") ?: 0
+                    val muted = call.argument<Boolean>("muted") ?: false
+                    nativeSetTrackMute(nativeHandle, trackIdx, muted)
+                    result.success(true)
+                }
                 "setInstrumentSends" -> {
                     val instrIdx = call.argument<Int>("instrIdx") ?: 0
                     val rev = call.argument<Double>("rev")?.toFloat() ?: 0f
@@ -266,6 +278,8 @@ class AudioEnginePlugin(private val context: Context) {
     private external fun nativeSetChorusRate(handle: Long, norm: Float)
     private external fun nativeSetChorusDepth(handle: Long, norm: Float)
     private external fun nativeSetTrackSends(handle: Long, trackIdx: Int, rev: Float, del: Float, cho: Float)
+    private external fun nativeSetTrackLevel(handle: Long, trackIdx: Int, level: Float)
+    private external fun nativeSetTrackMute(handle: Long, trackIdx: Int, muted: Boolean)
     private external fun nativeSetInstrumentSends(handle: Long, instrIdx: Int, rev: Float, del: Float, cho: Float)
     private external fun nativeSetInstrumentFilters(handle: Long, instrIdx: Int, hpNorm: Float, lpNorm: Float)
     private external fun nativeSetInstrumentPlaybackParams(handle: Long, instrIdx: Int, pitch: Float, volume: Float, startNorm: Float, endNorm: Float, attackSec: Float, releaseSec: Float, loopMode: Int)

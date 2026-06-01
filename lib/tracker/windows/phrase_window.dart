@@ -59,8 +59,8 @@ class PhraseWindow extends StatelessWidget {
                       final isSelected  = model.isRowInLineSelection(row);
                       final step = model.phrases[model.activePhraseIdx].steps[row];
 
-                      Color? rowColor = isPlaying  ? Colors.orange.withOpacity(0.12)
-                                      : isSelected ? Colors.cyan.withOpacity(0.15)
+                      Color? rowColor = isPlaying  ? Colors.orange.withValues(alpha: 0.12)
+                                      : isSelected ? Colors.cyan.withValues(alpha: 0.15)
                                       : null;
                       
                       return Container(

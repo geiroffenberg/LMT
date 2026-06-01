@@ -254,16 +254,48 @@ public:
         }
         applyBiquad(mLpCoeffs, mLpZx, mLpZy, outL, outR, nsamples);
 
-        // ── Drive into brick-wall ceiling at -0.3 dBFS ─────────────────────
-        static constexpr float kCeiling = 0.9657f; // 10^(-0.3/20)
-        const float drive = std::pow(10.0f, mLimDriveDB / 20.0f);
+        // ── Soft-knee peak limiter ────────────────────────────────────────
+        // Drive (mLimDriveDB): 0-12 dB input gain before the ceiling.
+        // Ceiling: -0.3 dBFS.  Knee: 6 dB wide.  Attack: ~0.3ms, Release: ~200ms.
+        // Algorithm: linked-stereo ballistic envelope → gain reduction in dB space
+        // with standard soft-knee formula → no hard clip artefacts.
+        static constexpr float kKneeDB   = 6.0f;           // knee width in dB
+        static constexpr float kThreshDB = -0.3f;          // ceiling in dBFS
+        static constexpr float kLn10_20  = 0.115129254f;   // ln(10)/20
+
+        const float drive        = std::pow(10.0f, mLimDriveDB / 20.0f);
+        const float sr_f         = static_cast<float>(mSampleRate);
+        const float attackCoeff  = std::exp(-1.0f / (0.0003f * sr_f));   // ~0.3 ms
+        const float releaseCoeff = std::exp(-1.0f / (0.200f  * sr_f));   // ~200 ms
+
         for (int i = 0; i < nsamples; ++i) {
-            outL[i] *= drive;
-            outR[i] *= drive;
-            if (outL[i] >  kCeiling) outL[i] =  kCeiling;
-            if (outL[i] < -kCeiling) outL[i] = -kCeiling;
-            if (outR[i] >  kCeiling) outR[i] =  kCeiling;
-            if (outR[i] < -kCeiling) outR[i] = -kCeiling;
+            const float inL  = outL[i] * drive;
+            const float inR  = outR[i] * drive;
+            const float peak = std::max(std::abs(inL), std::abs(inR));
+
+            // Ballistic envelope follower — fast attack, slow release
+            if (peak > mLimEnv)
+                mLimEnv = attackCoeff  * mLimEnv + (1.0f - attackCoeff)  * peak;
+            else
+                mLimEnv = releaseCoeff * mLimEnv + (1.0f - releaseCoeff) * peak;
+
+            // Soft-knee gain reduction (standard compressor knee formula, ratio = ∞)
+            float gain = 1.0f;
+            if (mLimEnv > 1e-6f) {
+                const float envDB = std::log(mLimEnv) / kLn10_20;   // 20*log10
+                const float diff  = envDB - kThreshDB;
+                float gainDB = 0.0f;
+                if (diff > kKneeDB * 0.5f) {
+                    gainDB = -diff;                                   // full limiting
+                } else if (diff > -kKneeDB * 0.5f) {
+                    const float x = diff + kKneeDB * 0.5f;           // 0..kKneeDB
+                    gainDB = -(x * x) / (2.0f * kKneeDB);            // smooth knee
+                }
+                gain = std::exp(gainDB * kLn10_20);
+            }
+
+            outL[i] = inL * gain;
+            outR[i] = inR * gain;
         }
 
         // ── Master volume ─────────────────────────────────────────────────
@@ -300,6 +332,7 @@ private:
     // ── Limiter & volume ──────────────────────────────────────────────────
     float mLimDriveDB  = 0.0f;   // 0..12 dB pre-gain driving into -0.3 dBFS ceiling
     float mMasterVol   = 0.8f;   // 0..1
+    float mLimEnv      = 0.0f;   // linked-stereo peak envelope (linear, ballistic follower)
 
     // Apply one biquad filter in-place (Direct Form I, stereo)
     void applyBiquad(const float coeff[5], float zx[2][2], float zy[2][2],
