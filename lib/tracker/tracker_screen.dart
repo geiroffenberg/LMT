@@ -1,8 +1,12 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'package:archive/archive.dart';
+import 'package:archive/archive_io.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 import 'tracker_model.dart';
 import 'tracker_styles.dart';
 import 'windows/song_window.dart';
@@ -789,7 +793,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   }
 
   Widget _buildProjectMenu() {
-    const menuItems = ['SAVE SONG', 'SAVE AS...', 'NEW SONG', 'LOAD SONG', 'SONG SETTINGS', 'MANUAL', 'FOLDER'];
+    const menuItems = ['SAVE SONG', 'SAVE AS...', 'NEW SONG', 'LOAD SONG', 'EXPORT WAV', 'EXPORT ZIP', 'IMPORT ZIP', 'SONG SETTINGS', 'MANUAL'];
 
     return Positioned(
       right: 8,
@@ -886,7 +890,8 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         if (newName != null && newName.isNotEmpty) {
           final saveOk = await ProjectManager.saveProject(newName, model);
           if (!mounted) return;
-          if (saveOk) model.setCurrentProject(newName, '');
+          // Note: ProjectManager.saveProject already calls model.setCurrentProject
+          // with the real path — don't override it here.
           setState(() {});
           _showStatusSnackBar(saveOk, saveOk ? 'Saved as: $newName' : 'Save FAILED — check logs');
         }
@@ -908,6 +913,18 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         _showLoadSongDialog();
         break;
 
+      case 'EXPORT WAV':
+        _exportSongToWav();
+        break;
+
+      case 'EXPORT ZIP':
+        _exportProjectAsZip();
+        break;
+
+      case 'IMPORT ZIP':
+        _importProjectFromZip();
+        break;
+
       case 'SONG SETTINGS':
         _showSongSettingsDialog();
         break;
@@ -915,12 +932,226 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       case 'MANUAL':
         showManual(context);
         break;
-
-      case 'FOLDER':
-        // TODO: Browse projects folder
-        debugPrint('Folder clicked');
-        break;
     }
+  }
+
+  Future<void> _importProjectFromZip() async {
+    // Use withData:true — on Android 10+ the picked path may be a content URI
+    // that File() cannot read directly; bytes are always populated.
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['zip'],
+      withData: true,
+    );
+    if (result == null || result.files.single.bytes == null) return;
+
+    final bytes = result.files.single.bytes!;
+    final zipBasename = result.files.single.name;
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.black,
+        elevation: 0,
+        shape: const RoundedRectangleBorder(
+          side: BorderSide(color: Colors.white54),
+          borderRadius: BorderRadius.zero,
+        ),
+        content: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(color: kGreen),
+            const SizedBox(width: 16),
+            Text('Importing ZIP...', style: trackerStyle(size: 18, color: Colors.white)),
+          ],
+        ),
+      ),
+    );
+
+    bool ok = false;
+    String message = 'Import failed';
+
+    try {
+      // Derive project name from zip filename (strip .zip)
+      final projectName = zipBasename.endsWith('.zip')
+          ? zipBasename.substring(0, zipBasename.length - 4)
+          : zipBasename;
+
+      // Create project folder in LMT_PROJECTS
+      final projectDir = await ProjectManager.createProject(projectName);
+      if (projectDir == null) throw Exception('Could not create project folder');
+
+      // Extract zip into project folder using archive's built-in extractor
+      final archive = ZipDecoder().decodeBytes(bytes);
+      extractArchiveToDisk(archive, projectDir.path);
+
+      // Verify song.lmt exists
+      final songFile = File('${projectDir.path}/${ProjectManager.songFileName}');
+      if (!songFile.existsSync()) {
+        // Clean up and bail
+        await projectDir.delete(recursive: true);
+        throw Exception('ZIP does not contain a valid LMT project (missing song.lmt)');
+      }
+
+      // Load the project
+      final loadedModel = await ProjectManager.loadProject(projectDir);
+      if (loadedModel == null) throw Exception('Could not parse project data');
+
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop(); // close spinner
+
+      // Stop any active playback before replacing model
+      if (model.isPlaying) {
+        model.stopPlayback();
+        await NativeAudioEngine.clearQueue();
+        await NativeAudioEngine.stopAll();
+        _stepTimer?.cancel();
+        _stepTimer = null;
+      }
+
+      // Push all samples to C++ engine
+      for (int i = 0; i < loadedModel.instruments.length; i++) {
+        final samplePath = loadedModel.instruments[i].sample;
+        if (samplePath.isNotEmpty) {
+          await NativeAudioEngine.loadSample(i, samplePath);
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        model = loadedModel;
+        _samplerInstrumentOpen = -1;
+        _currentStepIndex = 0;
+        _songRowMap = [];
+        _chainRowMap = [];
+        _phraseLen = 0;
+      });
+      model.clearUndoHistory();
+      _syncMixerSendsToNative();
+      _syncTrackMutesToNative();
+
+      _showStatusSnackBar(true, 'Imported: $projectName');
+      return;
+    } catch (e) {
+      message = 'Import failed: $e';
+    }
+
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pop();
+    _showStatusSnackBar(ok, message);
+  }
+
+  Future<void> _exportProjectAsZip() async {
+    if (model.currentProjectName == 'UNTITLED' || !model.hasProjectPath()) {
+      _showStatusSnackBar(false, 'Name your song first (use SAVE AS...)');
+      return;
+    }
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.black,
+        elevation: 0,
+        shape: const RoundedRectangleBorder(
+          side: BorderSide(color: Colors.white54),
+          borderRadius: BorderRadius.zero,
+        ),
+        content: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(color: kGreen),
+            const SizedBox(width: 16),
+            Text('Zipping project...', style: trackerStyle(size: 18, color: Colors.white)),
+          ],
+        ),
+      ),
+    );
+
+    String? resultMessage;
+    bool ok = false;
+
+    try {
+      final projectDir = Directory(model.currentProjectPath);
+      final zipFileName = '${model.currentProjectName}.zip';
+
+      // Auto-save before zipping so the zip reflects current state
+      await ProjectManager.saveProject(model.currentProjectName, model);
+
+      // Write zip to a temp file in app cache
+      final cacheDir = await getTemporaryDirectory();
+      final tempZipPath = '${cacheDir.path}/$zipFileName';
+
+      final encoder = ZipFileEncoder();
+      encoder.create(tempZipPath);
+      await encoder.addDirectory(projectDir, includeDirName: false);
+      encoder.close();
+
+      // Copy to public Downloads
+      final saved = await NativeAudioEngine.saveToDownloads(
+          sourcePath: tempZipPath, fileName: zipFileName);
+      // Clean up temp file
+      File(tempZipPath).deleteSync();
+
+      ok = saved != null;
+      resultMessage = ok ? 'ZIP saved to Downloads: $zipFileName' : 'ZIP export failed';
+    } catch (e) {
+      resultMessage = 'ZIP export failed: $e';
+    }
+
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pop();
+    _showStatusSnackBar(ok, resultMessage);
+    setState(() {});
+  }
+
+  Future<void> _exportSongToWav() async {
+    if (model.isPlaying) {
+      _showStatusSnackBar(false, 'Stop playback before exporting');
+      return;
+    }
+    if (model.currentProjectName == 'UNTITLED' || !model.hasProjectPath()) {
+      _showStatusSnackBar(false, 'Name your song first (use SAVE AS...)');
+      return;
+    }
+
+    // Show progress indicator
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.black,
+        elevation: 0,
+        shape: const RoundedRectangleBorder(
+          side: BorderSide(color: Colors.white54),
+          borderRadius: BorderRadius.zero,
+        ),
+        content: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(color: kGreen),
+            const SizedBox(width: 16),
+            Text('Exporting WAV...', style: trackerStyle(size: 18, color: Colors.white)),
+          ],
+        ),
+      ),
+    );
+
+    final filePath = await model.exportSongToWav();
+
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pop(); // close dialog
+
+    if (filePath != null) {
+      _showStatusSnackBar(true, 'WAV saved to Downloads: ${filePath.split('/').last}');
+    } else {
+      _showStatusSnackBar(false, 'Export failed — is the song empty?');
+    }
+    setState(() {});
   }
 
   Future<void> _showLoadSongDialog() async {

@@ -1,4 +1,4 @@
-package com.example.lmt
+package com.metamind.lmt
 
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine

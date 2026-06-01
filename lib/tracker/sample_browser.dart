@@ -75,19 +75,13 @@ class SampleBrowser {
   }
 
   static Future<bool> _requestStoragePermission() async {
-    PermissionStatus status = PermissionStatus.denied;
-
     if (Platform.isAndroid) {
-      status = await Permission.manageExternalStorage.request();
-      if (status.isGranted) return true;
-
-      status = await Permission.storage.request();
-      if (status.isGranted) return true;
-
-      status = await Permission.photos.request();
-      return status.isGranted;
+      // Android 13+ uses READ_MEDIA_AUDIO; older versions use READ_EXTERNAL_STORAGE.
+      final audioOk = await Permission.audio.request();
+      if (audioOk.isGranted) return true;
+      final storageOk = await Permission.storage.request();
+      return storageOk.isGranted;
     }
-
     return true;
   }
 

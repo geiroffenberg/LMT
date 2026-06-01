@@ -209,6 +209,10 @@ public:
     // Post-limiter master bus peak for the master VU meter
     float getMasterPeak() const { return mMasterPeakLinear; }
 
+    // WAV export tap — capture final stereo output while playing
+    void startExportTap();
+    std::vector<float> stopExportTap(int& outSampleRate);
+
     // Master chain: EQ-5 → HP → LP → Limiter → Volume
     void setEqBand(int band, float dBgain);   // band 0-4, dBgain -12..+12
     void setHpFreq(float hz);                  // 20..1000 Hz
@@ -307,4 +311,10 @@ private:
 
     // WAV file parsing
     bool parseWavMono16(const std::string& path, std::vector<float>& outMono, int32_t& outSampleRate);
+
+    // Export tap state
+    static constexpr int kMaxExportFrames = 48000 * 60 * 10; // 10 minutes
+    std::mutex           mExportMutex;
+    std::atomic<bool>    mExportTapActive{false};
+    std::vector<float>   mExportBuffer; // interleaved stereo L,R
 };

@@ -2,6 +2,8 @@ import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'audio/audio_engine.dart';
+import 'audio/wav_encoder.dart';
 import 'fx_commands.dart';
 import 'models/sampler_params.dart';
 
@@ -1367,4 +1369,65 @@ class TrackerModel {
   // Legacy alias kept so existing callers don't break
   List<Map<String, dynamic>> buildPlaybackRows({int startRow = 0}) =>
       buildPlaybackData(startRow: startRow).rows;
+
+  // ---------------------------------------------------------------------------
+  // WAV export — record-while-playing tap
+  // ---------------------------------------------------------------------------
+
+  /// Export the full song to a WAV file.
+  ///
+  /// Returns the file path on success, or null if already playing or no
+  /// project path is set or there are no rows to export.
+  Future<String?> exportSongToWav() async {
+    if (isPlaying) return null;
+    if (!hasProjectPath()) return null;
+
+    // Build playback data from row 0 (full song, no loop)
+    final data = buildPlaybackData(startRow: 0);
+    if (data.rows.isEmpty) return null;
+
+    // Compute total duration in seconds (48 kHz sample rate)
+    final totalFrames = data.rows.fold<int>(
+        0, (sum, row) => sum + (row['lineSamples'] as int));
+    final totalSeconds = totalFrames / 48000.0;
+    // Extra tail to capture reverb/delay decay
+    const tailSeconds = 3.0;
+
+    // Arm the export tap before any audio flows
+    await NativeAudioEngine.startExportTap();
+
+    // Start playback from row 0 (non-looping)
+    isPlaying = true;
+    await NativeAudioEngine.enqueueAllRows(false, data.rows);
+
+    // Wait for song duration + tail (delay/reverb decay)
+    await Future<void>.delayed(
+        Duration(milliseconds: ((totalSeconds + tailSeconds) * 1000).round()));
+
+    // Stop playback
+    isPlaying = false;
+    await NativeAudioEngine.clearQueue();
+    await NativeAudioEngine.stopAll();
+
+    // Retrieve captured audio
+    final tap = await NativeAudioEngine.stopExportTap();
+    if (tap.samples.isEmpty) return null;
+
+    // Encode to WAV
+    final wavBytes = WavEncoder.encodeWav(
+        samples: tap.samples,
+        sampleRate: tap.sampleRate,
+        numChannels: 2);
+
+    // Save next to project file (app-private storage)
+    final fileName = '$currentProjectName.wav';
+    final filePath = '$currentProjectPath/$fileName';
+    await File(filePath).writeAsBytes(wavBytes, flush: true);
+
+    // Also copy to public Downloads so it appears in the Files app
+    await NativeAudioEngine.saveToDownloads(
+        sourcePath: filePath, fileName: fileName);
+
+    return filePath;
+  }
 }

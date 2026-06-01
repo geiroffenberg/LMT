@@ -1,6 +1,10 @@
-package com.example.lmt
+package com.metamind.lmt
 
+import android.content.ContentValues
 import android.content.Context
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -244,6 +248,29 @@ class AudioEnginePlugin(private val context: Context) {
                 "getMasterPeak" -> {
                     result.success(nativeGetMasterPeak(nativeHandle).toDouble())
                 }
+                "startExportTap" -> {
+                    nativeStartExportTap(nativeHandle)
+                    result.success(null)
+                }
+                "stopExportTap" -> {
+                    val outRate = IntArray(1) { 48000 }
+                    val samples = nativeStopExportTap(nativeHandle, outRate)
+                    result.success(mapOf(
+                        "samples" to samples.map { it.toDouble() },
+                        "sampleRate" to outRate[0]
+                    ))
+                }
+                "saveToDownloads" -> {
+                    val sourcePath = call.argument<String>("sourcePath") ?: ""
+                    val fileName   = call.argument<String>("fileName")   ?: "export.wav"
+                    try {
+                        val displayName = saveFileToDownloads(sourcePath, fileName)
+                        result.success(displayName)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "saveToDownloads failed", e)
+                        result.error("SAVE_FAILED", e.message, null)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
@@ -292,4 +319,39 @@ class AudioEnginePlugin(private val context: Context) {
     private external fun nativeSetMasterVolume(handle: Long, norm: Float)
     private external fun nativeGetTrackPeaks(handle: Long): FloatArray
     private external fun nativeGetMasterPeak(handle: Long): Float
+    private external fun nativeStartExportTap(handle: Long)
+    private external fun nativeStopExportTap(handle: Long, outSampleRate: IntArray): FloatArray
+
+    // -------------------------------------------------------------------------
+    // Save a file from app-private storage into the public Downloads folder
+    // using MediaStore (Android 10+) or direct path (Android 9 and below).
+    // Returns the display name on success.
+    // -------------------------------------------------------------------------
+    private fun saveFileToDownloads(sourcePath: String, fileName: String): String {
+        val src = File(sourcePath)
+        require(src.exists()) { "Source file not found: $sourcePath" }
+        val bytes = src.readBytes()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val resolver = context.contentResolver
+            val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                put(MediaStore.Downloads.MIME_TYPE, "audio/wav")
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val uri = resolver.insert(collection, values)
+                ?: throw IllegalStateException("MediaStore insert returned null")
+            resolver.openOutputStream(uri)?.use { it.write(bytes) }
+                ?: throw IllegalStateException("Could not open output stream for $uri")
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+        } else {
+            val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            dir.mkdirs()
+            File(dir, fileName).writeBytes(bytes)
+        }
+        return fileName
+    }
 }

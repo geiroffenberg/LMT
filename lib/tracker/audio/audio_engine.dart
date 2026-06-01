@@ -269,4 +269,45 @@ class NativeAudioEngine {
     }
     return 0.0;
   }
+
+  // ---------------------------------------------------------------------------
+  // WAV export tap
+  // ---------------------------------------------------------------------------
+
+  static Future<void> startExportTap() async {
+    try {
+      await platform.invokeMethod<void>('startExportTap');
+    } catch (e) {
+      debugPrint('Error startExportTap: $e');
+    }
+  }
+
+  static Future<({List<double> samples, int sampleRate})> stopExportTap() async {
+    try {
+      final result = await platform.invokeMethod<Map>('stopExportTap');
+      final rawSamples = result?['samples'] as List? ?? const [];
+      final sampleRate = (result?['sampleRate'] as int?) ?? 48000;
+      final samples = rawSamples.map((e) => (e as num).toDouble()).toList();
+      return (samples: samples, sampleRate: sampleRate);
+    } catch (e) {
+      debugPrint('Error stopExportTap: $e');
+      return (samples: const <double>[], sampleRate: 48000);
+    }
+  }
+
+  /// Copy a file from app-private storage to the public Downloads folder.
+  /// [sourcePath]: absolute path to the source file.
+  /// [fileName]: desired filename in Downloads (e.g. "MySong.wav").
+  /// Returns the filename on success, null on failure.
+  static Future<String?> saveToDownloads(
+      {required String sourcePath, required String fileName}) async {
+    try {
+      final result = await platform.invokeMethod<String>(
+          'saveToDownloads', {'sourcePath': sourcePath, 'fileName': fileName});
+      return result;
+    } catch (e) {
+      debugPrint('Error saveToDownloads: $e');
+      return null;
+    }
+  }
 }

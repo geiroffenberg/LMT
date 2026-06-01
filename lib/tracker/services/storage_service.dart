@@ -1,30 +1,17 @@
 import 'package:flutter/foundation.dart';
 import 'dart:io';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:path_provider/path_provider.dart';
 
 class StorageService {
   static const String projectsFolderName = 'LMT_PROJECTS';
 
-  /// Request storage permissions
-  static Future<bool> requestPermissions() async {
-    if (Platform.isAndroid) {
-      // For Android 11+, we need MANAGE_EXTERNAL_STORAGE
-      final status = await Permission.manageExternalStorage.request();
-      debugPrint('Storage permission status: $status');
-      return status.isGranted;
-    } else if (Platform.isIOS) {
-      final status = await Permission.photos.request();
-      return status.isGranted;
-    }
-    return true; // Desktop platforms don't need permission
-  }
-
-  /// Get the LMT_PROJECTS folder path (at root of internal storage)
+  /// Get the LMT_PROJECTS folder path inside app-specific external storage.
+  /// No permissions needed on any Android version.
   static Future<Directory?> getProjectsFolder() async {
     try {
-      // Get the root storage directory
-      final rootDir = Directory('/storage/emulated/0');
-      final projectsDir = Directory('${rootDir.path}/$projectsFolderName');
+      final base = await getExternalStorageDirectory() ??
+          await getApplicationDocumentsDirectory();
+      final projectsDir = Directory('${base.path}/$projectsFolderName');
       debugPrint('Projects folder path: ${projectsDir.path}');
       return projectsDir;
     } catch (e) {
@@ -37,15 +24,6 @@ class StorageService {
   static Future<bool> initializeStorage() async {
     try {
       debugPrint('=== Initializing Storage ===');
-      
-      // First request permissions
-      debugPrint('Requesting storage permissions...');
-      final hasPermission = await requestPermissions();
-      if (!hasPermission) {
-        debugPrint('ERROR: Storage permission denied');
-        return false;
-      }
-      debugPrint('✓ Storage permission granted');
 
       // Get the projects folder
       final projectsDir = await getProjectsFolder();

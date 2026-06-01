@@ -999,7 +999,33 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         }
     }
 
+    // Export tap — copy final stereo output to export buffer
+    if (mExportTapActive.load()) {
+        std::lock_guard<std::mutex> exportLock(mExportMutex);
+        if (mExportTapActive.load()) {
+            if ((int)mExportBuffer.size() < kMaxExportFrames * 2) {
+                mExportBuffer.insert(
+                    mExportBuffer.end(),
+                    outputData,
+                    outputData + numFrames * 2);
+            }
+        }
+    }
+
     return oboe::DataCallbackResult::Continue;
+}
+
+void AudioEngine::startExportTap() {
+    std::lock_guard<std::mutex> lock(mExportMutex);
+    mExportBuffer.clear();
+    mExportTapActive.store(true);
+}
+
+std::vector<float> AudioEngine::stopExportTap(int& outSampleRate) {
+    mExportTapActive.store(false);
+    std::lock_guard<std::mutex> lock(mExportMutex);
+    outSampleRate = mSampleRate;
+    return std::move(mExportBuffer);
 }
 
 float AudioEngine::processSample(Voice& voice, const SampleData& sample, float effFrequency) {
@@ -1177,44 +1203,44 @@ void AudioEngine::onErrorBeforeClose(oboe::AudioStream *audioStream, oboe::Resul
 extern "C" {
 
 JNIEXPORT jlong JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeCreate(JNIEnv *env, jobject obj) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeCreate(JNIEnv *env, jobject obj) {
     gAudioEngine = new AudioEngine();
     return reinterpret_cast<jlong>(gAudioEngine);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeDestroy(JNIEnv *env, jobject obj, jlong handle) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeDestroy(JNIEnv *env, jobject obj, jlong handle) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     delete engine;
     if (engine == gAudioEngine) gAudioEngine = nullptr;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeOpen(JNIEnv *env, jobject obj, jlong handle) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeOpen(JNIEnv *env, jobject obj, jlong handle) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     return engine->open();
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeClose(JNIEnv *env, jobject obj, jlong handle) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeClose(JNIEnv *env, jobject obj, jlong handle) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->close();
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeStart(JNIEnv *env, jobject obj, jlong handle) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeStart(JNIEnv *env, jobject obj, jlong handle) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     return engine->start();
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeStop(JNIEnv *env, jobject obj, jlong handle) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeStop(JNIEnv *env, jobject obj, jlong handle) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->stop();
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeLoadSample(JNIEnv *env, jobject obj, jlong handle,
+Java_com_metamind_lmt_AudioEnginePlugin_nativeLoadSample(JNIEnv *env, jobject obj, jlong handle,
                                                          jint instrumentIdx, jstring path) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     const char* pathStr = env->GetStringUTFChars(path, nullptr);
@@ -1224,21 +1250,21 @@ Java_com_example_lmt_AudioEnginePlugin_nativeLoadSample(JNIEnv *env, jobject obj
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeClearSample(JNIEnv *env, jobject obj, jlong handle,
+Java_com_metamind_lmt_AudioEnginePlugin_nativeClearSample(JNIEnv *env, jobject obj, jlong handle,
                                                           jint instrumentIdx) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->clearSample(instrumentIdx);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeNoteOn(JNIEnv *env, jobject obj, jlong handle,
+Java_com_metamind_lmt_AudioEnginePlugin_nativeNoteOn(JNIEnv *env, jobject obj, jlong handle,
                                                      jint instrumentIdx, jfloat frequency, jfloat level) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->noteOn(instrumentIdx, frequency, level);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeNoteOnRegion(JNIEnv *env, jobject obj, jlong handle,
+Java_com_metamind_lmt_AudioEnginePlugin_nativeNoteOnRegion(JNIEnv *env, jobject obj, jlong handle,
                                                            jint instrumentIdx, jfloat frequency,
                                                            jfloat level, jfloat startNorm, jfloat endNorm,
                                                            jfloat attackTime, jfloat releaseTime, jint loopMode) {
@@ -1247,41 +1273,41 @@ Java_com_example_lmt_AudioEnginePlugin_nativeNoteOnRegion(JNIEnv *env, jobject o
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeNoteOff(JNIEnv *env, jobject obj, jlong handle,
+Java_com_metamind_lmt_AudioEnginePlugin_nativeNoteOff(JNIEnv *env, jobject obj, jlong handle,
                                                       jint instrumentIdx) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->noteOff(instrumentIdx);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeStopAll(JNIEnv *env, jobject obj, jlong handle) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeStopAll(JNIEnv *env, jobject obj, jlong handle) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->stopAll();
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeIsPlaying(JNIEnv *env, jobject obj, jlong handle,
+Java_com_metamind_lmt_AudioEnginePlugin_nativeIsPlaying(JNIEnv *env, jobject obj, jlong handle,
                                                         jint instrumentIdx) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     return engine->isVoicePlaying(instrumentIdx);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetLevel(JNIEnv *env, jobject obj, jlong handle,
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetLevel(JNIEnv *env, jobject obj, jlong handle,
                                                        jint instrumentIdx, jfloat level) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->setLevel(instrumentIdx, level);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetPan(JNIEnv *env, jobject obj, jlong handle,
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetPan(JNIEnv *env, jobject obj, jlong handle,
                                                      jint instrumentIdx, jfloat pan) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->setPan(instrumentIdx, pan);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeUpdateStretch(JNIEnv *env, jobject obj, jlong handle,
+Java_com_metamind_lmt_AudioEnginePlugin_nativeUpdateStretch(JNIEnv *env, jobject obj, jlong handle,
                                                             jint instrumentIdx, jboolean enabled,
                                                             jint beats, jfloat bpm, jboolean preservePitch) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
@@ -1381,7 +1407,7 @@ void AudioEngine::setChorusDepth(float norm) {
 /// rowData is a flat int array with the following layout per row:
 ///   [lineSamples, numNoteInts, noteInt0, noteInt1, ..., lineSamples, ...]
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeEnqueueAllRows(JNIEnv *env, jobject obj, jlong handle,
+Java_com_metamind_lmt_AudioEnginePlugin_nativeEnqueueAllRows(JNIEnv *env, jobject obj, jlong handle,
                                                               jboolean loop, jintArray rowData) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
 
@@ -1407,13 +1433,13 @@ Java_com_example_lmt_AudioEnginePlugin_nativeEnqueueAllRows(JNIEnv *env, jobject
 }
 
 JNIEXPORT jint JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeConsumeRowAdvances(JNIEnv *env, jobject obj, jlong handle) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeConsumeRowAdvances(JNIEnv *env, jobject obj, jlong handle) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     return engine->consumePendingRowAdvances();
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeClearQueue(JNIEnv *env, jobject obj, jlong handle) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeClearQueue(JNIEnv *env, jobject obj, jlong handle) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->clearQueue();
 }
@@ -1423,70 +1449,70 @@ Java_com_example_lmt_AudioEnginePlugin_nativeClearQueue(JNIEnv *env, jobject obj
 // ---------------------------------------------------------------------------
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetReverbSize(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetReverbSize(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->setReverbSize(norm);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetReverbDamping(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetReverbDamping(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->setReverbDamping(norm);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetReverbWidth(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetReverbWidth(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->setReverbWidth(norm);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetDelayTime(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetDelayTime(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->setDelayTime(norm);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetDelayFeedback(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetDelayFeedback(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->setDelayFeedback(norm);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetChorusRate(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetChorusRate(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->setChorusRate(norm);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetChorusDepth(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetChorusDepth(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->setChorusDepth(norm);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetTrackSends(JNIEnv *env, jobject obj, jlong handle,
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetTrackSends(JNIEnv *env, jobject obj, jlong handle,
                                                              jint trackIdx, jfloat rev, jfloat del, jfloat cho) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->setTrackSends(static_cast<int>(trackIdx), rev, del, cho);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetTrackLevel(JNIEnv *env, jobject obj, jlong handle,
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetTrackLevel(JNIEnv *env, jobject obj, jlong handle,
                                                              jint trackIdx, jfloat level) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->setTrackLevel(static_cast<int>(trackIdx), level);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetTrackMute(JNIEnv *env, jobject obj, jlong handle,
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetTrackMute(JNIEnv *env, jobject obj, jlong handle,
                                                             jint trackIdx, jboolean muted) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->setTrackMute(static_cast<int>(trackIdx), muted == JNI_TRUE);
 }
 
 JNIEXPORT jfloatArray JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeGetTrackPeaks(JNIEnv *env, jobject obj, jlong handle) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeGetTrackPeaks(JNIEnv *env, jobject obj, jlong handle) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     jfloatArray result = env->NewFloatArray(8);
     jfloat peaks[8];
@@ -1496,64 +1522,84 @@ Java_com_example_lmt_AudioEnginePlugin_nativeGetTrackPeaks(JNIEnv *env, jobject 
 }
 
 JNIEXPORT jfloat JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeGetMasterPeak(JNIEnv *env, jobject obj, jlong handle) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeGetMasterPeak(JNIEnv *env, jobject obj, jlong handle) {
     return reinterpret_cast<AudioEngine*>(handle)->getMasterPeak();
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetEqBand(JNIEnv *env, jobject obj, jlong handle, jint band, jfloat dBgain) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetEqBand(JNIEnv *env, jobject obj, jlong handle, jint band, jfloat dBgain) {
     reinterpret_cast<AudioEngine*>(handle)->setEqBand(static_cast<int>(band), dBgain);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetHpFreq(JNIEnv *env, jobject obj, jlong handle, jfloat hz) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetHpFreq(JNIEnv *env, jobject obj, jlong handle, jfloat hz) {
     reinterpret_cast<AudioEngine*>(handle)->setHpFreq(hz);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetHpRes(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetHpRes(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
     reinterpret_cast<AudioEngine*>(handle)->setHpRes(norm);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetLpFreq(JNIEnv *env, jobject obj, jlong handle, jfloat hz) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetLpFreq(JNIEnv *env, jobject obj, jlong handle, jfloat hz) {
     reinterpret_cast<AudioEngine*>(handle)->setLpFreq(hz);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetLpRes(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetLpRes(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
     reinterpret_cast<AudioEngine*>(handle)->setLpRes(norm);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetLimiterThreshold(JNIEnv *env, jobject obj, jlong handle, jfloat dB) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetLimiterThreshold(JNIEnv *env, jobject obj, jlong handle, jfloat dB) {
     reinterpret_cast<AudioEngine*>(handle)->setLimiterThreshold(dB);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetMasterVolume(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetMasterVolume(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
     reinterpret_cast<AudioEngine*>(handle)->setMasterVolume(norm);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetInstrumentSends(JNIEnv *env, jobject obj, jlong handle,
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetInstrumentSends(JNIEnv *env, jobject obj, jlong handle,
                                                                   jint instrIdx, jfloat rev, jfloat del, jfloat cho) {
     reinterpret_cast<AudioEngine*>(handle)->setInstrumentSends(static_cast<int>(instrIdx), rev, del, cho);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetInstrumentFilters(JNIEnv *env, jobject obj, jlong handle,
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetInstrumentFilters(JNIEnv *env, jobject obj, jlong handle,
                                                                     jint instrIdx, jfloat hpNorm, jfloat lpNorm) {
     reinterpret_cast<AudioEngine*>(handle)->setInstrumentFilters(static_cast<int>(instrIdx), hpNorm, lpNorm);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_lmt_AudioEnginePlugin_nativeSetInstrumentPlaybackParams(JNIEnv *env, jobject obj, jlong handle,
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetInstrumentPlaybackParams(JNIEnv *env, jobject obj, jlong handle,
                                                                           jint instrIdx, jfloat pitch, jfloat volume,
                                                                           jfloat startNorm, jfloat endNorm,
                                                                           jfloat attackSec, jfloat releaseSec, jint loopMode) {
     reinterpret_cast<AudioEngine*>(handle)->setInstrumentPlaybackParams(
         static_cast<int>(instrIdx), pitch, volume, startNorm, endNorm, attackSec, releaseSec, static_cast<int>(loopMode));
+}
+
+JNIEXPORT void JNICALL
+Java_com_metamind_lmt_AudioEnginePlugin_nativeStartExportTap(JNIEnv*, jobject, jlong handle) {
+    reinterpret_cast<AudioEngine*>(handle)->startExportTap();
+}
+
+JNIEXPORT jfloatArray JNICALL
+Java_com_metamind_lmt_AudioEnginePlugin_nativeStopExportTap(
+        JNIEnv* env, jobject, jlong handle, jintArray outSampleRate) {
+    int sampleRate = 48000;
+    std::vector<float> samples = reinterpret_cast<AudioEngine*>(handle)->stopExportTap(sampleRate);
+    jint* ratePtr = env->GetIntArrayElements(outSampleRate, nullptr);
+    ratePtr[0] = sampleRate;
+    env->ReleaseIntArrayElements(outSampleRate, ratePtr, 0);
+    jfloatArray result = env->NewFloatArray(static_cast<jsize>(samples.size()));
+    if (result != nullptr && !samples.empty()) {
+        env->SetFloatArrayRegion(result, 0, static_cast<jsize>(samples.size()), samples.data());
+    }
+    return result;
 }
 
 } // extern "C"
