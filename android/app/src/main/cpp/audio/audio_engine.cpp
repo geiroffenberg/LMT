@@ -566,9 +566,20 @@ void AudioEngine::fireRow(const QueuedRow& row) {
         const int fx2cmd   = row.noteData[i + 7];
         const int fx2val   = row.noteData[i + 8];
 
-        if (instrIdx < 0 || instrIdx >= kMaxVoices) continue;
-
         const int trackIdx = std::min((i / stride), 7);
+
+        if (instrIdx < 0 || instrIdx >= kMaxVoices) {
+            // No instrument on this step — if there's a note, retrigger
+            // the last instrument used on this track at the new pitch.
+            if (midiNote >= 0 && trackIdx < 8) {
+                const int lastInstr = mLastInstrOnTrack[trackIdx];
+                if (lastInstr >= 0 && lastInstr < kMaxVoices) {
+                    triggerNote(lastInstr, midiNote, vol, trackIdx, row.lineSamples,
+                                fx0cmd, fx0val, fx1cmd, fx1val, fx2cmd, fx2val);
+                }
+            }
+            continue;
+        }
 
         if (midiNote == -2) {
             // Note off
@@ -578,6 +589,9 @@ void AudioEngine::fireRow(const QueuedRow& row) {
             v.isFadingOut = true;
             v.samplesUntilStop = v.releaseSamples > 0 ? v.releaseSamples : (mSampleRate / 100);
         } else if (midiNote >= 0) {
+            // Track which instrument last fired on this track
+            if (trackIdx >= 0 && trackIdx < 8) mLastInstrOnTrack[trackIdx] = instrIdx;
+
             // Check for DEL: if found, schedule a delayed note instead of firing immediately
             const int fxCmds[3] = {fx0cmd, fx1cmd, fx2cmd};
             const int fxVals[3] = {fx0val, fx1val, fx2val};
@@ -637,6 +651,7 @@ void AudioEngine::clearQueue() {
     mQueueIndex = 0;
     mRowSampleCount = 0;
     mPendingAdvances.store(0);
+    for (int i = 0; i < 8; i++) mLastInstrOnTrack[i] = -1;
     LOGD("Sequencer: cleared");
 }
 

@@ -317,4 +317,8 @@ private:
     std::mutex           mExportMutex;
     std::atomic<bool>    mExportTapActive{false};
     std::vector<float>   mExportBuffer; // interleaved stereo L,R
+
+    // Last instrument triggered per track (0-7) — used to retrigger at a new
+    // pitch when a step has a note but no instrument column set.
+    int mLastInstrOnTrack[8] = {-1,-1,-1,-1,-1,-1,-1,-1};
 };

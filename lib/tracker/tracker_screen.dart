@@ -1186,41 +1186,94 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
 
     final selectedDir = await showDialog<Directory>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.black,
-        elevation: 0,
-        shape: const RoundedRectangleBorder(
-          side: BorderSide(color: Colors.white54),
-          borderRadius: BorderRadius.zero,
-        ),
-        title: Text('Load Song', style: trackerStyle(size: 22, color: Colors.white)),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: ListView.builder(
-            shrinkWrap: true,
-            itemCount: projects.length,
-            itemBuilder: (_, i) {
-              final name = ProjectManager.getProjectName(projects[i]);
-              return InkWell(
-                onTap: () => Navigator.pop(ctx, projects[i]),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
-                  decoration: const BoxDecoration(
-                    border: Border(bottom: BorderSide(color: Colors.white12)),
-                  ),
-                  child: Text(name, style: trackerStyle(size: 18, color: kGreen)),
-                ),
-              );
-            },
+      builder: (ctx) {
+        final list = List<Directory>.from(projects);
+        return StatefulBuilder(
+          builder: (ctx, setDlgState) => AlertDialog(
+            backgroundColor: Colors.black,
+            elevation: 0,
+            shape: const RoundedRectangleBorder(
+              side: BorderSide(color: Colors.white54),
+              borderRadius: BorderRadius.zero,
+            ),
+            title: Text('Load Song', style: trackerStyle(size: 22, color: Colors.white)),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: list.isEmpty
+                  ? Text('No projects.', style: trackerStyle(size: 18, color: Colors.white54))
+                  : ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: list.length,
+                      itemBuilder: (_, i) {
+                        final name = ProjectManager.getProjectName(list[i]);
+                        return Container(
+                          decoration: const BoxDecoration(
+                            border: Border(bottom: BorderSide(color: Colors.white12)),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: InkWell(
+                                  onTap: () => Navigator.pop(ctx, list[i]),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                                    child: Text(name, style: trackerStyle(size: 18, color: kGreen)),
+                                  ),
+                                ),
+                              ),
+                              InkWell(
+                                onTap: () async {
+                                  // Confirm before deleting
+                                  final confirm = await showDialog<bool>(
+                                    context: ctx,
+                                    builder: (c2) => AlertDialog(
+                                      backgroundColor: Colors.black,
+                                      elevation: 0,
+                                      shape: const RoundedRectangleBorder(
+                                        side: BorderSide(color: Colors.red),
+                                        borderRadius: BorderRadius.zero,
+                                      ),
+                                      title: Text('Delete "$name"?',
+                                          style: trackerStyle(size: 20, color: Colors.red)),
+                                      content: Text('This cannot be undone.',
+                                          style: trackerStyle(size: 16, color: Colors.white54)),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () => Navigator.pop(c2, false),
+                                          child: Text('CANCEL', style: trackerStyle(size: 16, color: Colors.white54)),
+                                        ),
+                                        TextButton(
+                                          onPressed: () => Navigator.pop(c2, true),
+                                          child: Text('DELETE', style: trackerStyle(size: 16, color: Colors.red)),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                  if (confirm == true) {
+                                    await list[i].delete(recursive: true);
+                                    setDlgState(() => list.removeAt(i));
+                                  }
+                                },
+                                child: const Padding(
+                                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                  child: Icon(Icons.delete_outline, color: Colors.red, size: 20),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text('Cancel', style: trackerStyle(size: 18, color: Colors.white54)),
+              ),
+            ],
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text('Cancel', style: trackerStyle(size: 18, color: Colors.white54)),
-          ),
-        ],
-      ),
+        );
+      },
     );
 
     if (selectedDir == null || !mounted) return;
