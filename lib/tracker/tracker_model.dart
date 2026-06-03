@@ -365,12 +365,10 @@ class TrackerModel {
   }
 
   /// Returns the smallest phrase number (1-99) whose phrase data is completely
-  /// empty (all steps have note == noteNone), or -1 if all are in use.
+  /// empty (all steps have note == noteNone or noteEnd), or -1 if all are in use.
   int firstAvailablePhrase() {
     for (int i = 0; i < 99; i++) {
-      if (phrases[i].steps.every((step) => step.note == PhraseStep.noteNone)) {
-        return i + 1;
-      }
+      if (_isPhraseEmpty(i)) return i + 1;
     }
     return -1;
   }
@@ -505,6 +503,22 @@ class TrackerModel {
 
     // Update the current cell to point to the new chain
     song.chains[cursorRow][cursorCol] = targetChainNum;
+  }
+
+  /// Replicate the phrase in the current chain row: copy it to the first free
+  /// phrase slot and update the chain cell to point to the new phrase.
+  void replicatePhrase() {
+    if (currentWindow != 1) return;
+
+    final sourcePhraseNum = chains[activeChainIdx].items[cursorRow].phrase;
+    if (sourcePhraseNum <= 0 || sourcePhraseNum > 99) return;
+
+    final targetPhraseNum = firstAvailablePhrase();
+    if (targetPhraseNum <= 0) return;
+
+    _copyPhrase(sourcePhraseNum - 1, targetPhraseNum - 1);
+    chains[activeChainIdx].items[cursorRow].phrase = targetPhraseNum;
+    activePhraseIdx = targetPhraseNum - 1;
   }
 
   /// Call this from a BPM timer.
@@ -974,8 +988,9 @@ class TrackerModel {
       if (copyBuffer.isNotEmpty) {
         applyEdit(copyBuffer);
       }
-    } else if (action == 'REP') {
+    } else if (action == 'CLO') {
       if (currentWindow == 0) replicateChain();
+      else if (currentWindow == 1) replicatePhrase();
     } else if (action == 'OFF') {
       // Note off marker — only meaningful in phrase note column
       if (currentWindow == 2 && cursorCol == 0) {

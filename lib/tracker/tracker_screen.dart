@@ -1601,16 +1601,21 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         : ['−', '+', '−10', '+10'];
 
     // Song window: REP + DEL
+    // Chain window PH column with data: REP + DEL + X
     // Phrase note column: OFF + END + DEL + X
     // Phrase other columns: CPY + CUT + PST + DEL + X
     // Chain / Instrument / Mixer: just DEL + X (+/- in line 1 is enough)
+    final isChainPhCol = model.currentWindow == 1 && model.cursorCol == 0 &&
+        model.chains[model.activeChainIdx].items[model.cursorRow].phrase > 0;
     final line2Items = model.currentWindow == 0
-        ? ['REP', 'DEL', 'X']
-        : model.currentWindow == 2
-            ? (isNoteColumn
-                ? ['OFF', 'END', 'DEL', 'X']
-                : ['CPY', 'CUT', 'PST', 'DEL', 'X'])
-            : ['DEL', 'X'];
+        ? ['CLO', 'DEL', 'X']
+        : isChainPhCol
+            ? ['CLO', 'DEL', 'X']
+            : model.currentWindow == 2
+                ? (isNoteColumn
+                    ? ['OFF', 'END', 'DEL', 'X']
+                    : ['CPY', 'CUT', 'PST', 'DEL', 'X'])
+                : ['DEL', 'X'];
 
     return Positioned(
       bottom: 0,
