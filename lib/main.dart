@@ -59,12 +59,25 @@ void main() async {
   // Initialize native audio engine
   await NativeAudioEngine.initialize();
 
-  // Push all samples to the C++ engine (engine resets on every app start)
+  // Push all samples + sampler params to the C++ engine (engine resets on every app start)
   for (int i = 0; i < model.instruments.length; i++) {
-    final samplePath = model.instruments[i].sample;
+    final instr = model.instruments[i];
+    final samplePath = instr.sample;
     if (samplePath.isNotEmpty) {
       await NativeAudioEngine.loadSample(i, samplePath);
     }
+    // Always push sampler params so start/end/attack/release/loop are restored
+    final s = instr.sampler;
+    await NativeAudioEngine.setInstrumentPlaybackParams(
+      i,
+      s.pitch,
+      s.volume,
+      s.start,
+      s.end,
+      s.attack,
+      s.release,
+      s.loopMode,
+    );
   }
 
   runApp(LMTApp(initialModel: model));

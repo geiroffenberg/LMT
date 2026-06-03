@@ -28,7 +28,7 @@ class ChainItem {
 }
 
 class Phrase {
-  final List<PhraseStep> steps = List.generate(99, (_) => PhraseStep());
+  final List<PhraseStep> steps = List.generate(99, (i) => PhraseStep()..note = (i == 16 ? PhraseStep.noteEnd : PhraseStep.noteNone));
   int length = 16; // Number of active steps (1-99)
 }
 
@@ -150,15 +150,6 @@ class TrackerModel {
       soloedTracks.remove(t);
     } else {
       soloedTracks.add(t);
-    }
-  }
-
-  /// Toggle mute for track [t].
-  void toggleMute(int t) {
-    if (mutedTracks.contains(t)) {
-      mutedTracks.remove(t);
-    } else {
-      mutedTracks.add(t);
     }
   }
 
@@ -1164,6 +1155,80 @@ class TrackerModel {
   }
 
   // -----------------------------------------------------------------------
+  // Build C++ rows for a single chain (chain view playback).
+  // Plays chain [chainIdx] on track 0; tracks 1-7 are silent.
+  // -----------------------------------------------------------------------
+  ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap})
+      buildChainData(int chainIdx) {
+    final rows          = <Map<String, dynamic>>[];
+    final songRowMap    = <int>[];
+    final chainRowMap   = <int>[];
+    final phraseStepMap = <int>[];
+
+    int currentBpm = song.bpm;
+    int currentLpb = song.lpb;
+
+    final chainItems = chains[chainIdx].items.where((ci) => ci.phrase != 0).toList();
+    for (int slot = 0; slot < chainItems.length; slot++) {
+      final ci = chainItems[slot];
+      for (final fx in ci.fx) {
+        if (fx.name == 'BPM') currentBpm = fxValToBpm(fx.value);
+        else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
+      }
+      final ph  = phrases[ci.phrase - 1];
+      final len = _getPhraseLen(ph);
+      if (len == 0) continue;
+
+      for (int step = 0; step < len; step++) {
+        final ps = ph.steps[step];
+        if (ps.note == PhraseStep.noteEnd) break;
+        for (final fx in ps.fx) {
+          if (fx.name == 'BPM') currentBpm = fxValToBpm(fx.value);
+          else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
+        }
+        final int lineSamples = (48000.0 * 60.0 / (currentBpm * currentLpb)).round();
+
+        int instrIdx = ps.instrument > 0 ? ps.instrument - 1 : -1;
+        int midiNote = ps.note;
+        if (instrIdx >= 0 && midiNote >= 0 && ci.transpose != 0) {
+          final int semitones = ci.transpose <= 12 ? ci.transpose : ci.transpose - 100;
+          midiNote = (midiNote + semitones).clamp(0, 120);
+        }
+        final fxIds  = [0, 0, 0];
+        final fxVals = [0, 0, 0];
+        for (int i = 0; i < ps.fx.length && i < 3; i++) {
+          fxIds[i]  = _fxIdForC(ps.fx[i].name);
+          fxVals[i] = ps.fx[i].value;
+        }
+        final noteData = <int>[instrIdx, midiNote, ps.volume];
+        for (int i = 0; i < 3; i++) { noteData.add(fxIds[i]); noteData.add(fxVals[i]); }
+        for (int t = 1; t < 8; t++) { noteData.addAll([-1, -1, -1, 0, 0, 0, 0, 0, 0]); }
+
+        rows.add({'lineSamples': lineSamples, 'noteData': noteData});
+        songRowMap.add(0);
+        chainRowMap.add(slot);
+        phraseStepMap.add(step);
+      }
+    }
+    return (rows: rows, songRowMap: songRowMap, chainRowMap: chainRowMap, phraseStepMap: phraseStepMap);
+  }
+
+  // -----------------------------------------------------------------------
+  // Build C++ rows for a single phrase (phrase view playback).
+  // -----------------------------------------------------------------------
+  ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap})
+      buildPhraseData(int phraseIdx) {
+    final rows = buildPhraseRows(phraseIdx);
+    final n = rows.length;
+    return (
+      rows: rows,
+      songRowMap: List.filled(n, 0),
+      chainRowMap: List.filled(n, 0),
+      phraseStepMap: List.generate(n, (i) => i),
+    );
+  }
+
+  // -----------------------------------------------------------------------
   // Build all C++ rows for Song playback starting from [startRow].
   // Returns rows + a parallel songRowMap (which song row each C++ row belongs to)
   // so the Dart poll timer can update playheadRow correctly.
@@ -1181,11 +1246,12 @@ class TrackerModel {
     return kFxId[name] ?? 0;
   }
 
-  ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap})
+  ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap})
       buildPlaybackData({int startRow = 0}) {
-    final rows        = <Map<String, dynamic>>[];
-    final songRowMap  = <int>[];  // parallel: rows[i] belongs to song row songRowMap[i]
-    final chainRowMap = <int>[];  // parallel: rows[i] belongs to chain slot chainRowMap[i]
+    final rows          = <Map<String, dynamic>>[];
+    final songRowMap    = <int>[];  // parallel: rows[i] belongs to song row songRowMap[i]
+    final chainRowMap   = <int>[];  // parallel: rows[i] belongs to chain slot chainRowMap[i]
+    final phraseStepMap = <int>[];  // parallel: rows[i] belongs to phrase step phraseStepMap[i]
 
     int currentBpm = song.bpm;
     int currentLpb = song.lpb;
@@ -1328,11 +1394,12 @@ class TrackerModel {
           rows.add({'lineSamples': lineSamples, 'noteData': noteData});
           songRowMap.add(songRow);
           chainRowMap.add(slot);
+          phraseStepMap.add(step);
         }
       }
     }
 
-    return (rows: rows, songRowMap: songRowMap, chainRowMap: chainRowMap);
+    return (rows: rows, songRowMap: songRowMap, chainRowMap: chainRowMap, phraseStepMap: phraseStepMap);
   }
 
   // -----------------------------------------------------------------------

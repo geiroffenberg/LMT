@@ -466,10 +466,9 @@ const _mixer = [
     ['Delay',   'Time, feedback'],
     ['Chorus',  'Rate, depth'],
   ]),
-  _Block.h2('Mute and Solo'),
-  _Block.body('Double-tap a VU meter → Solo that track (yellow border + S).'),
-  _Block.body('Long-press a VU meter → Mute that track (red border + M).'),
-  _Block.body('Tap again to clear. Mute/solo state is saved with the project.'),
+  _Block.h2('Solo Tracks'),
+  _Block.body('Tap a VU meter → Toggle solo for that track (yellow border + S).'),
+  _Block.body('All other tracks mute automatically when any track is soloed. Solo state is saved with the project.'),
 ];
 
 const _playback = [
@@ -608,6 +607,6 @@ const _tips = [
     ['4', 'Use Chain FX for variation — TPO to transpose, BPM for a tempo drop'],
     ['5', 'Use REP in Song view — copies phrases to fresh slots (M8 workflow)'],
     ['6', 'Dial in the Mixer last — levels and reverb/delay once arrangement is locked'],
-    ['7', 'Mute/Solo while mixing — double-tap meter to solo, long-press to mute'],
+    ['7', 'Solo tracks while mixing — tap meter to toggle solo on a track'],
   ]),
 ];

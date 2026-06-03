@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
-import 'package:archive/archive.dart';
 import 'package:archive/archive_io.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -38,9 +37,9 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   // Playback tracking
   List<int> _songRowMap    = [];  // C++ row index → song row number
   List<int> _chainRowMap   = [];  // C++ row index → chain slot number
+  List<int> _phraseStepMap = [];  // C++ row index → phrase step number
   int _currentStepIndex    = 0;   // current position in C++ queue
-  bool _playingPhraseMode  = false; // true when playing from Phrase window
-  int _phraseLen           = 0;   // step count for phrase-mode loop wrap
+  int _playbackWindow      = 0;   // window that triggered play (0=song, 1=chain, 2=phrase)
   Timer? _autoSaveTimer;
   final FocusNode _keyListenerFocusNode = FocusNode();
 
@@ -91,10 +90,15 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   Future<void> _reinitAudio() async {
     await NativeAudioEngine.initialize();
     for (int i = 0; i < model.instruments.length; i++) {
-      final samplePath = model.instruments[i].sample;
-      if (samplePath.isNotEmpty) {
-        await NativeAudioEngine.loadSample(i, samplePath);
+      final instr = model.instruments[i];
+      if (instr.sample.isNotEmpty) {
+        await NativeAudioEngine.loadSample(i, instr.sample);
       }
+      // Restore sampler params (start/end/attack/release/loop/pitch/vol)
+      final s = instr.sampler;
+      await NativeAudioEngine.setInstrumentPlaybackParams(
+        i, s.pitch, s.volume, s.start, s.end, s.attack, s.release, s.loopMode,
+      );
     }
     // Push current mixer + mute state to the engine so the audio side
     // matches the model after init/resume/load.
@@ -127,7 +131,33 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     });
   }
 
-  /// Push all 8 mixer channel send levels to the native audio engine.
+  /// Preview a note in phrase window when it's edited (note or instrument column)
+  void _playPhraseNotePreview() {
+    final step = model.phrases[model.activePhraseIdx].steps[model.cursorRow];
+    final instIdx = step.instrument;
+    final noteVal = step.note;
+
+    // Only play if instrument is assigned and note is valid (0-120)
+    if (instIdx <= 0 || noteVal < 0 || noteVal > 120) return;
+
+    final int nativeIdx = instIdx - 1; // instrument is 1-indexed in model
+    final freq = 440.0 * math.pow(2.0, (noteVal - 69) / 12.0);
+    final vol  = step.volume > 0 ? step.volume / 99.0 : 0.8;
+
+    // Use sampler params so start/end/attack/release/loop are respected
+    final s = model.instruments[nativeIdx].sampler;
+    NativeAudioEngine.noteOnRegion(
+      nativeIdx,
+      freq,
+      vol * s.volume,
+      s.start,
+      s.end,
+      attackTime:  s.attack,
+      releaseTime: s.release,
+      loopMode:    s.loopMode,
+    );
+  }
+
   void _syncMixerSendsToNative() {
     for (int i = 0; i < model.mixerChannels.length; i++) {
       final ch = model.mixerChannels[i];
@@ -152,21 +182,18 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   /// mute/solo (or other "structural" edits) take effect on the next row.
   Future<void> _reenqueueFromPlayhead() async {
     if (!model.isPlaying) return;
-    if (_playingPhraseMode) {
-      final rows = model.buildPhraseRows(model.activePhraseIdx);
-      if (rows.isEmpty) return;
-      await NativeAudioEngine.clearQueue();
-      await NativeAudioEngine.enqueueAllRows(model.isLooping, rows);
-      _phraseLen = rows.length;
-    } else {
-      final data = model.buildPlaybackData(startRow: model.playheadRow);
-      if (data.rows.isEmpty) return;
-      await NativeAudioEngine.clearQueue();
-      await NativeAudioEngine.enqueueAllRows(model.isLooping, data.rows);
-      _songRowMap  = data.songRowMap;
-      _chainRowMap = data.chainRowMap;
-      _currentStepIndex = 0;
-    }
+    final data = _playbackWindow == 2
+        ? model.buildPhraseData(model.activePhraseIdx)
+        : _playbackWindow == 1
+            ? model.buildChainData(model.activeChainIdx)
+            : model.buildPlaybackData(startRow: model.playheadRow);
+    if (data.rows.isEmpty) return;
+    await NativeAudioEngine.clearQueue();
+    await NativeAudioEngine.enqueueAllRows(model.isLooping, data.rows);
+    _songRowMap    = data.songRowMap;
+    _chainRowMap   = data.chainRowMap;
+    _phraseStepMap = data.phraseStepMap;
+    _currentStepIndex = 0;
   }
 
   void _startPollTimer() {
@@ -175,18 +202,12 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       final advanced = await NativeAudioEngine.consumeRowAdvances();
       if (advanced > 0) {
         setState(() {
-          if (_playingPhraseMode) {
-            // Phrase window: wrap playhead around phrase length so loop resets to row 0
-            if (_phraseLen > 0) {
-              model.playheadRow = (model.playheadRow + advanced) % _phraseLen;
-            }
-          } else {
-            // Song window: map step index → actual song row and chain slot
-            if (_songRowMap.isNotEmpty) {
-              _currentStepIndex = (_currentStepIndex + advanced) % _songRowMap.length;
-              model.playheadRow      = _songRowMap[_currentStepIndex];
-              model.playheadChainRow = _chainRowMap[_currentStepIndex];
-            }
+          // Map step index → actual song row and chain slot
+          if (_songRowMap.isNotEmpty) {
+            _currentStepIndex = (_currentStepIndex + advanced) % _songRowMap.length;
+            model.playheadRow      = _songRowMap[_currentStepIndex];
+            model.playheadChainRow = _chainRowMap[_currentStepIndex];
+            model.phraseStep       = _phraseStepMap.isNotEmpty ? _phraseStepMap[_currentStepIndex] : 0;
           }
         });
       }
@@ -207,34 +228,26 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       setState(() {});
     } else {
       model.startPlayback();
-      _currentStepIndex   = 0;
-      _playingPhraseMode  = model.currentWindow == 2;
+      _currentStepIndex = 0;
+      _playbackWindow   = model.currentWindow;
 
-      List<Map<String, dynamic>> rows;
+      final data = _playbackWindow == 2
+          ? model.buildPhraseData(model.activePhraseIdx)
+          : _playbackWindow == 1
+              ? model.buildChainData(model.activeChainIdx)
+              : model.buildPlaybackData(startRow: model.cursorRow);
 
-      if (_playingPhraseMode) {
-        // Phrase window: play just the active phrase
-        rows = model.buildPhraseRows(model.activePhraseIdx);
-        _songRowMap = [];
-        _chainRowMap = [];
-        _phraseLen = rows.length;
-        model.playheadRow = 0;
-      } else {
-        // Song (or Chain) window: play from current song cursor row
-        final data = model.buildPlaybackData(startRow: model.cursorRow);
-        rows = data.rows;
-        _songRowMap  = data.songRowMap;
-        _chainRowMap = data.chainRowMap;
-        _phraseLen = 0;
-        model.playheadRow = model.cursorRow;
-      }
+      _songRowMap    = data.songRowMap;
+      _chainRowMap   = data.chainRowMap;
+      _phraseStepMap = data.phraseStepMap;
+      model.playheadRow = _playbackWindow == 0 ? model.cursorRow : 0;
 
-      if (rows.isEmpty) {
+      if (data.rows.isEmpty) {
         model.stopPlayback();
         setState(() {});
         return;
       }
-      await NativeAudioEngine.enqueueAllRows(model.isLooping, rows);
+      await NativeAudioEngine.enqueueAllRows(model.isLooping, data.rows);
       _startPollTimer();
       setState(() {});
     }
@@ -352,6 +365,8 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
               if (model.editBuffer.isNotEmpty) model.pushUndo();
               model.applyEdit(model.editBuffer);
               if (model.currentWindow == 4) _syncMixerSendsToNative();
+              // Trigger audio preview for phrase note editing
+              _playPhraseNotePreview();
             });
           }
         } else {
@@ -491,16 +506,11 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               // LED meter: 6 blocks × 5 dB, range −30..0 dB.
-                              // Double-tap = solo, long-press = mute.
+                              // Tap = toggle solo
                               GestureDetector(
                                 behavior: HitTestBehavior.opaque,
-                                onDoubleTap: () async {
+                                onTap: () async {
                                   model.toggleSolo(ch);
-                                  setState(() {});
-                                  _syncTrackMutesToNative();
-                                },
-                                onLongPress: () async {
-                                  model.toggleMute(ch);
                                   setState(() {});
                                   _syncTrackMutesToNative();
                                 },
@@ -510,14 +520,12 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                                       : -60.0;
                                   final Color borderColor = isSoloed
                                       ? Colors.yellow
-                                      : isMuted
-                                          ? Colors.red
-                                          : Colors.white;
+                                      : Colors.white;
                                   return Container(
                                     width: meterWidth,
                                     height: 40,
                                     decoration: BoxDecoration(
-                                      border: Border.all(color: borderColor, width: isSoloed || isMuted ? 2 : 1),
+                                      border: Border.all(color: borderColor, width: isSoloed ? 2 : 1),
                                       color: Colors.black,
                                     ),
                                     padding: const EdgeInsets.all(2),
@@ -529,7 +537,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                                             // i=0 = top block (−5..0 dB), i=5 = bottom (−30..−25 dB)
                                             final int blockIdx = 5 - i;
                                             final double thresh = -30.0 + blockIdx * 5.0;
-                                            final bool lit = !isMuted && dB >= thresh;
+                                            final bool lit = dB >= thresh;
                                             final bool isHot = blockIdx == 5;
                                             return Container(
                                               width: double.infinity,
@@ -548,18 +556,6 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                                               child: Text('S',
                                                 style: TextStyle(
                                                   color: Colors.yellow,
-                                                  fontSize: 10,
-                                                  fontWeight: FontWeight.bold),
-                                              ),
-                                            ),
-                                          )
-                                        else if (isMuted)
-                                          const Positioned(
-                                            top: 0, left: 0, right: 0,
-                                            child: Center(
-                                              child: Text('M',
-                                                style: TextStyle(
-                                                  color: Colors.red,
                                                   fontSize: 10,
                                                   fontWeight: FontWeight.bold),
                                               ),
@@ -1026,7 +1022,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         _currentStepIndex = 0;
         _songRowMap = [];
         _chainRowMap = [];
-        _phraseLen = 0;
+        _phraseStepMap = [];
       });
       model.clearUndoHistory();
       _syncMixerSendsToNative();
@@ -1305,7 +1301,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       _currentStepIndex = 0;
       _songRowMap = [];
       _chainRowMap = [];
-      _phraseLen = 0;
+      _phraseStepMap = [];
     });
     model.clearUndoHistory();
     _syncMixerSendsToNative();
@@ -1646,6 +1642,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                             model.pushUndo();
                             model.performMenuAction(item);
                             if (model.currentWindow == 4) _syncMixerSendsToNative();
+                            // Preview after pitch nudge in phrase note column
+                            if (model.currentWindow == 2 && model.cursorCol == 0) {
+                              _playPhraseNotePreview();
+                            }
                             setState(() {});
                           }
                         },
@@ -1748,7 +1748,11 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       case 1:
         return ChainWindow(model: model, onStateChange: () => setState(() {}));
       case 2:
-        return PhraseWindow(model: model, onStateChange: () => setState(() {}));
+        return PhraseWindow(
+          model: model,
+          onStateChange: () => setState(() {}),
+          onNotePreview: _playPhraseNotePreview,
+        );
       case 3:
         return InstrumentWindow(
           model: model,

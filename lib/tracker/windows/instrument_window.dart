@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../tracker_model.dart';
 import '../tracker_styles.dart';
@@ -267,7 +268,17 @@ class _InstrumentWindowState extends State<InstrumentWindow> {
                         behavior: HitTestBehavior.opaque,
                         onTap: hasSample
                             ? () async {
-                                await NativeAudioEngine.noteOn(row, 261.626, 0.8);
+                                final s = inst.sampler;
+                                final pitchFreq = 261.626 * math.pow(2.0, s.pitch);
+                                final attackSec = s.attack * 0.5;
+                                final releaseSec = s.release * 0.5;
+                                await NativeAudioEngine.noteOnRegion(
+                                  row, pitchFreq, s.volume,
+                                  s.start, s.end,
+                                  attackTime: attackSec,
+                                  releaseTime: releaseSec,
+                                  loopMode: s.loopMode,
+                                );
                               }
                             : null,
                         onLongPress: hasSample

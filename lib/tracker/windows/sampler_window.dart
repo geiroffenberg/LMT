@@ -989,6 +989,64 @@ class _SamplerWindowState extends State<SamplerWindow> {
                 ],
               ),
             ),
+
+            // Copy to new instrument button
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () async {
+                final src = model.instruments[instrumentIdx];
+                if (src.sample.isEmpty) return;
+                final freeSlot = model.instruments.indexWhere((i) => i.sample.isEmpty);
+                if (freeSlot < 0) {
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('No free instrument slots')),
+                  );
+                  return;
+                }
+                final dst = model.instruments[freeSlot];
+                dst.sample = src.sample;
+                dst.sampler = SamplerParams.copy(src.sampler);
+                await NativeAudioEngine.loadSample(freeSlot, src.sample);
+                await NativeAudioEngine.setInstrumentPlaybackParams(
+                  freeSlot,
+                  dst.sampler.pitch,
+                  dst.sampler.volume,
+                  dst.sampler.start,
+                  dst.sampler.end,
+                  dst.sampler.attack * 0.5,
+                  dst.sampler.release * 0.5,
+                  dst.sampler.loopMode,
+                );
+                await NativeAudioEngine.setInstrumentSends(
+                  freeSlot,
+                  dst.sampler.revSend,
+                  dst.sampler.delSend,
+                  dst.sampler.modSend,
+                );
+                await NativeAudioEngine.setInstrumentFilters(
+                  freeSlot,
+                  dst.sampler.hpCutoff,
+                  dst.sampler.lpCutoff,
+                );
+                onStateChange();
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Copied to instrument ${(freeSlot + 1).toString().padLeft(2, '0')}')),
+                );
+              },
+              child: Container(
+                height: _rowH,
+                decoration: const BoxDecoration(
+                  border: Border(top: BorderSide(color: Colors.white, width: 1)),
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  'COPY TO NEW INSTRUMENT',
+                  style: trackerStyle(size: ((_rowH * 0.6).clamp(16.0, 28.0)) - 4, color: kGreen),
+                ),
+              ),
+            ),
           ],
         );
       },

@@ -11,10 +11,12 @@ const _headers = ['NT', 'IN', 'VOL', 'FX', 'VL', 'FX', 'VL'];
 class PhraseWindow extends StatelessWidget {
   final TrackerModel model;
   final VoidCallback onStateChange;
+  final VoidCallback? onNotePreview;
 
   const PhraseWindow({
     required this.model,
     required this.onStateChange,
+    this.onNotePreview,
     super.key,
   });
 
@@ -55,7 +57,7 @@ class PhraseWindow extends StatelessWidget {
                     itemExtent: _rowH,
                     itemBuilder: (context, row) {
                       final isRowCursor = model.cursorRow == row;
-                      final isPlaying   = model.isPlaying && model.playheadRow == row;
+                      final isPlaying   = model.isPlaying && model.phraseStep == row;
                       final isSelected  = model.isRowInLineSelection(row);
                       final step = model.phrases[model.activePhraseIdx].steps[row];
 
@@ -85,7 +87,7 @@ class PhraseWindow extends StatelessWidget {
                           ),
                         ),
                         // NT column with - and + buttons
-                        _buildNoteCell(row, step, isRowCursor, gs, ts, cellW, fontSize, onStateChange),
+                        _buildNoteCell(row, step, isRowCursor, gs, ts, cellW, fontSize, onStateChange, onNotePreview),
                         
                         // Other columns
                         ...List.generate(_numCols - 1, (colIdx) {
@@ -168,7 +170,7 @@ class PhraseWindow extends StatelessWidget {
   }
 
   Widget _buildNoteCell(int row, PhraseStep step, bool isRowCursor, TextStyle gs, TextStyle ts,
-      double cellW, double fontSize, VoidCallback onStateChange) {
+      double cellW, double fontSize, VoidCallback onStateChange, VoidCallback? onNotePreview) {
     final isCursor = isRowCursor && model.cursorCol == 0;
 
     return GestureDetector(
@@ -181,6 +183,8 @@ class PhraseWindow extends StatelessWidget {
         if (isDouble && step.note < 0) {
           // Double-tap on empty note: insert C-4
           step.note = 60;
+          // Preview the inserted note if an instrument is assigned
+          onNotePreview?.call();
         }
         model.enterEditMode();
         model.editMenuVisible = true;

@@ -211,13 +211,11 @@ Tap **FX** inside the mixer to open the master effects chain:
 | **Delay** | Time, feedback |
 | **Chorus** | Rate, depth |
 
-### Mute & Solo (bottom meter strip)
+### Solo Tracks
 
-- **Double-tap** a VU meter → **Solo** that track (yellow border + S).
-- **Long-press** a VU meter → **Mute** that track (red border + M).
-- Tap again to clear.
+**Tap** a VU meter → **Toggle solo** for that track (yellow border + S).
 
-Mute/solo state is saved with the project.
+All other tracks mute automatically when any track is soloed. Solo state is saved with the project.
 
 ---
 
@@ -225,13 +223,14 @@ Mute/solo state is saved with the project.
 
 | Control | Action |
 |---|---|
-| ▶ / ■ | Start / stop song playback |
+| ▶ / ■ | Start / stop song playback (plays all tracks from current cursor) |
 | ↺ | Toggle loop mode |
-| ▶ (phrase) | Play the current phrase in isolation |
 | Playhead | Orange row highlight shows the currently playing step |
+| Solo track | Tap any VU meter to toggle solo (yellow border + S) |
 
-During song playback the playhead row in the song grid and chain grid advances
-in sync.
+Pressing play in **any window** (Song, Chain, or Phrase) plays the full song from
+the current cursor position. All 8 tracks play together. Use the meter solo feature
+to hear a single track in isolation if needed.
 
 ---
 

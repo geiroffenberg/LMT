@@ -215,7 +215,16 @@ void AudioEngine::noteOnRegion(int instrumentIdx, float frequencyHz, float level
     voice.pingDir = false;
     // One-pole release coefficient: larger time constant → smaller coefficient → slower decay
     voice.releaseK = 1.0f - std::exp(-1.0f / (static_cast<float>(mSampleRate) * std::max(releaseTime, 1e-4f)));
-    
+    // Read per-instrument send levels so preview plays through effects exactly like the sequencer
+    voice.reverbSend = mInstrumentRevSend[instrumentIdx].load(std::memory_order_relaxed);
+    voice.delaySend  = mInstrumentDelSend[instrumentIdx].load(std::memory_order_relaxed);
+    voice.chorusSend = mInstrumentChoSend[instrumentIdx].load(std::memory_order_relaxed);
+    // Reset biquad filter state on new note trigger
+    voice.hpCutoff = mInstrumentHpCutoff[instrumentIdx].load(std::memory_order_relaxed);
+    voice.lpCutoff = mInstrumentLpCutoff[instrumentIdx].load(std::memory_order_relaxed);
+    voice.hpS1 = 0.0f; voice.hpS2 = 0.0f;
+    voice.lpS1 = 0.0f; voice.lpS2 = 0.0f;
+
     LOGD("noteOnRegion: idx=%d, attackTime=%.4fs (samples=%d), releaseTime=%.4fs (samples=%d), loopMode=%d, freq=%.1f, level=%.2f",
         instrumentIdx, attackTime, voice.attackSamples, releaseTime, voice.releaseSamples, loopMode, frequencyHz, level);
 }
@@ -225,10 +234,15 @@ void AudioEngine::noteOff(int instrumentIdx) {
 
     std::lock_guard<std::mutex> lock(mVoiceMutex);
     Voice& voice = mVoices[instrumentIdx];
-    voice.isActive = false;
-    voice.gainTarget = 0.0f;
+    if (!voice.isActive || voice.isFadingOut) return; // already silent or already fading
+    // Snapshot current envelope so the release starts from the right level
+    if (voice.attackSamples > 0 && voice.elapsedSamples < voice.attackSamples)
+        voice.envLevel = (float)voice.elapsedSamples / (float)voice.attackSamples;
+    else
+        voice.envLevel = 1.0f;
     voice.isFadingOut = true;
-    voice.samplesUntilStop = voice.releaseSamples > 0 ? voice.releaseSamples : (mSampleRate / 100); // use release time or default 10ms
+    // Do NOT set isActive=false here — the render loop keeps the voice alive
+    // through the release decay and deactivates it once envLevel reaches zero.
 }
 
 void AudioEngine::stopAll() {
@@ -569,9 +583,20 @@ void AudioEngine::fireRow(const QueuedRow& row) {
         const int trackIdx = std::min((i / stride), 7);
 
         if (instrIdx < 0 || instrIdx >= kMaxVoices) {
-            // No instrument on this step — if there's a note, retrigger
-            // the last instrument used on this track at the new pitch.
-            if (midiNote >= 0 && trackIdx < 8) {
+            if (midiNote == -2 && trackIdx < 8) {
+                // OFF with no instrument: stop whatever was last playing on this track
+                const int lastInstr = mLastInstrOnTrack[trackIdx];
+                if (lastInstr >= 0 && lastInstr < kMaxVoices) {
+                    Voice& lv = mVoices[lastInstr];
+                    if (lv.isActive && !lv.isFadingOut) {
+                        lv.envLevel = (lv.attackSamples > 0 && lv.elapsedSamples < lv.attackSamples)
+                            ? (float)lv.elapsedSamples / (float)lv.attackSamples
+                            : 1.0f;
+                        lv.isFadingOut = true;
+                    }
+                }
+            } else if (midiNote >= 0 && trackIdx < 8) {
+                // No instrument on this step — retrigger last instrument at new pitch
                 const int lastInstr = mLastInstrOnTrack[trackIdx];
                 if (lastInstr >= 0 && lastInstr < kMaxVoices) {
                     triggerNote(lastInstr, midiNote, vol, trackIdx, row.lineSamples,
@@ -582,12 +607,14 @@ void AudioEngine::fireRow(const QueuedRow& row) {
         }
 
         if (midiNote == -2) {
-            // Note off
+            // Note off — start release envelope (do NOT kill isActive yet)
             Voice& v = mVoices[instrIdx];
-            v.isActive    = false;
-            v.gainTarget  = 0.0f;
-            v.isFadingOut = true;
-            v.samplesUntilStop = v.releaseSamples > 0 ? v.releaseSamples : (mSampleRate / 100);
+            if (v.isActive && !v.isFadingOut) {
+                v.envLevel = (v.attackSamples > 0 && v.elapsedSamples < v.attackSamples)
+                    ? (float)v.elapsedSamples / (float)v.attackSamples
+                    : 1.0f;
+                v.isFadingOut = true;
+            }
         } else if (midiNote >= 0) {
             // Track which instrument last fired on this track
             if (trackIdx >= 0 && trackIdx < 8) mLastInstrOnTrack[trackIdx] = instrIdx;
@@ -826,8 +853,12 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                     voice.elapsedSamples = 0;
                     voice.attackSamples  = 0;
                     voice.envLevel       = 1.0f;
-                    voice.isFadingOut    = false;
-                    voice.gainTarget     = 1.0f;
+                    // ⚠️ BUG FIX: Do NOT reset isFadingOut if OFF was issued.
+                    // If voice.isFadingOut is already true (from an OFF command),
+                    // preserve it so the note can release instead of retriggering.
+                    if (!voice.isFadingOut) {
+                        voice.gainTarget = 1.0f;
+                    }
                     if (voice.retVolCurve > 0) {
                         voice.level = std::max(0.0f, voice.level * (1.0f - voice.retVolCurve * 0.1f));
                     }
@@ -871,9 +902,12 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                 // Explicit fade-out: exponential decay toward 0 (click-free)
                 voice.envLevel += voice.releaseK * (0.0f - voice.envLevel);
                 if (voice.envLevel < 1e-4f) {
-                    // Voice is now inaudible; mark as inactive and skip remaining samples
-                    voice.envLevel = 0.0f;
-                    voice.isActive = false;
+                    // Voice is now inaudible — snap gain to zero and deactivate
+                    voice.envLevel    = 0.0f;
+                    voice.gain        = 0.0f;
+                    voice.gainTarget  = 0.0f;
+                    voice.isActive    = false;
+                    voice.isFadingOut = false;
                     break;
                 }
                 envelope = voice.envLevel;
