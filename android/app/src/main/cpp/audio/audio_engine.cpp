@@ -378,6 +378,7 @@ void AudioEngine::triggerNote(int instrIdx, int midiNote, int vol, int trackIdx,
                                int fx2cmd, int fx2val) {
     if (instrIdx < 0 || instrIdx >= kMaxVoices) return;
     if (!mSamples[instrIdx].isLoaded) return;
+    if (trackIdx < 0 || trackIdx >= kMaxVoices) return;
 
     const int fxCmds[3] = {fx0cmd, fx1cmd, fx2cmd};
     const int fxVals[3] = {fx0val, fx1val, fx2val};
@@ -400,7 +401,9 @@ void AudioEngine::triggerNote(int instrIdx, int midiNote, int vol, int trackIdx,
     const float freq  = midiToHz(midiNote) * std::pow(2.0f, pitchOctave);
     const float level = effVol * baseVol;
 
-    Voice& v = mVoices[instrIdx];
+    // Voice slot is keyed by TRACK, not instrument — this allows the same
+    // instrument to play simultaneously on multiple tracks.
+    Voice& v = mVoices[trackIdx];
     const int32_t numFrames = mSamples[instrIdx].numFrames;
     const float sf = startNorm * static_cast<float>(numFrames);
     const float ef = endNorm   * static_cast<float>(numFrames);
@@ -584,16 +587,13 @@ void AudioEngine::fireRow(const QueuedRow& row) {
 
         if (instrIdx < 0 || instrIdx >= kMaxVoices) {
             if (midiNote == -2 && trackIdx < 8) {
-                // OFF with no instrument: stop whatever was last playing on this track
-                const int lastInstr = mLastInstrOnTrack[trackIdx];
-                if (lastInstr >= 0 && lastInstr < kMaxVoices) {
-                    Voice& lv = mVoices[lastInstr];
-                    if (lv.isActive && !lv.isFadingOut) {
-                        lv.envLevel = (lv.attackSamples > 0 && lv.elapsedSamples < lv.attackSamples)
-                            ? (float)lv.elapsedSamples / (float)lv.attackSamples
-                            : 1.0f;
-                        lv.isFadingOut = true;
-                    }
+                // OFF with no instrument: stop voice on this track
+                Voice& lv = mVoices[trackIdx];
+                if (lv.isActive && !lv.isFadingOut) {
+                    lv.envLevel = (lv.attackSamples > 0 && lv.elapsedSamples < lv.attackSamples)
+                        ? (float)lv.elapsedSamples / (float)lv.attackSamples
+                        : 1.0f;
+                    lv.isFadingOut = true;
                 }
             } else if (midiNote >= 0 && trackIdx < 8) {
                 // No instrument on this step — retrigger last instrument at new pitch
@@ -607,8 +607,8 @@ void AudioEngine::fireRow(const QueuedRow& row) {
         }
 
         if (midiNote == -2) {
-            // Note off — start release envelope (do NOT kill isActive yet)
-            Voice& v = mVoices[instrIdx];
+            // Note off — start release envelope on this track's voice
+            Voice& v = mVoices[trackIdx];
             if (v.isActive && !v.isFadingOut) {
                 v.envLevel = (v.attackSamples > 0 && v.elapsedSamples < v.attackSamples)
                     ? (float)v.elapsedSamples / (float)v.attackSamples

@@ -252,39 +252,90 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       _currentStepIndex = 0;
       _playbackWindow   = model.currentWindow;
 
-      // Playback rules:
-      //   Song view  → play from cursor row. With loop ON, after end wraps to row 0
-      //                and continues looping the whole song.
-      //   Chain view → play from cursor slot. With loop ON, wraps to slot 0.
-      //   Phrase view → play this phrase from top.
-      // All tracks always play; use Solo/Mute to isolate.
-      final data = _playbackWindow == 2
-          ? model.buildPhraseData(model.activePhraseIdx)
-          : _playbackWindow == 1
-              ? model.buildChainData(model.activeChainIdx)
-              : model.buildPlaybackData(startRow: 0);
+      // Playback rules — all 8 tracks always play; Solo/Mute to isolate.
+      //   Song view  → play whole song from cursor row. Loop wraps to row 0.
+      //   Chain view → find the song row containing this chain, play the full
+      //                arrangement for that row (all tracks). Start at cursor slot.
+      //   Phrase view → find the song row + chain slot containing this phrase,
+      //                 play the full arrangement (all tracks).
+      late final ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap}) data;
+      int startOffset = 0;
+
+      if (_playbackWindow == 2) {
+        // Phrase view: locate song row + chain slot that references this phrase
+        final phraseRef = model.activePhraseIdx + 1;
+        int foundRow = -1, foundSlot = -1;
+        outer:
+        for (int r = 0; r < model.song.chains.length; r++) {
+          if (model.isSongRowEmpty(r)) break;
+          for (int t = 0; t < 8; t++) {
+            final chainRef = model.song.chains[r][t];
+            if (chainRef <= 0) continue;
+            final items = model.chains[chainRef - 1].items;
+            for (int s = 0; s < items.length; s++) {
+              if (items[s].phrase == phraseRef) {
+                foundRow = r; foundSlot = s;
+                break outer;
+              }
+            }
+          }
+        }
+        if (foundRow >= 0) {
+          data = model.buildPlaybackData(startRow: foundRow);
+          // Find offset for chain slot foundSlot, step 0
+          for (int i = 0; i < data.chainRowMap.length; i++) {
+            if (data.songRowMap[i] == foundRow && data.chainRowMap[i] == foundSlot && data.phraseStepMap[i] == 0) {
+              startOffset = i; break;
+            }
+          }
+        } else {
+          // Fallback: phrase isn't placed in song; play it solo on track 0
+          final rows = model.buildPhraseRows(model.activePhraseIdx);
+          data = (rows: rows,
+                  songRowMap: List.filled(rows.length, 0),
+                  chainRowMap: List.filled(rows.length, 0),
+                  phraseStepMap: List.generate(rows.length, (i) => i));
+        }
+      } else if (_playbackWindow == 1) {
+        // Chain view: locate song row that references this chain
+        final chainRef = model.activeChainIdx + 1;
+        int foundRow = -1;
+        outer:
+        for (int r = 0; r < model.song.chains.length; r++) {
+          if (model.isSongRowEmpty(r)) break;
+          for (int t = 0; t < 8; t++) {
+            if (model.song.chains[r][t] == chainRef) { foundRow = r; break outer; }
+          }
+        }
+        if (foundRow >= 0) {
+          data = model.buildPlaybackData(startRow: foundRow);
+          // Start at cursor slot within this song row
+          for (int i = 0; i < data.chainRowMap.length; i++) {
+            if (data.songRowMap[i] == foundRow &&
+                data.chainRowMap[i] == model.cursorRow &&
+                data.phraseStepMap[i] == 0) {
+              startOffset = i; break;
+            }
+          }
+        } else {
+          // Fallback: chain isn't placed in song; play it solo on track 0
+          data = model.buildChainData(model.activeChainIdx);
+        }
+      } else {
+        // Song view
+        data = model.buildPlaybackData(startRow: 0);
+        for (int i = 0; i < data.songRowMap.length; i++) {
+          if (data.songRowMap[i] == model.cursorRow) { startOffset = i; break; }
+        }
+      }
 
       _songRowMap    = data.songRowMap;
       _chainRowMap   = data.chainRowMap;
       _phraseStepMap = data.phraseStepMap;
 
-      // Find offset where the cursor row/slot begins in the built rows.
-      int startOffset = 0;
-      if (_playbackWindow == 0) {
-        for (int i = 0; i < _songRowMap.length; i++) {
-          if (_songRowMap[i] == model.cursorRow) { startOffset = i; break; }
-        }
-      } else if (_playbackWindow == 1) {
-        for (int i = 0; i < _chainRowMap.length; i++) {
-          if (_chainRowMap[i] == model.cursorRow) { startOffset = i; break; }
-        }
-      }
-
-      // Build the rows actually sent to C++:
-      //   loop ON  → rotate: [cursor..end] + [0..cursor)  (whole sequence loops)
-      //   loop OFF → only [cursor..end]                   (plays to end then stops)
+      // Rotate or trim based on loop state.
       List<Map<String, dynamic>> playRows;
-      if (model.isLooping && _playbackWindow != 2 && startOffset > 0) {
+      if (model.isLooping && startOffset > 0) {
         playRows = [
           ...data.rows.sublist(startOffset),
           ...data.rows.sublist(0, startOffset),
@@ -292,7 +343,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         _songRowMap    = [..._songRowMap.sublist(startOffset),    ..._songRowMap.sublist(0, startOffset)];
         _chainRowMap   = [..._chainRowMap.sublist(startOffset),   ..._chainRowMap.sublist(0, startOffset)];
         _phraseStepMap = [..._phraseStepMap.sublist(startOffset), ..._phraseStepMap.sublist(0, startOffset)];
-      } else if (!model.isLooping && _playbackWindow != 2 && startOffset > 0) {
+      } else if (!model.isLooping && startOffset > 0) {
         playRows       = data.rows.sublist(startOffset);
         _songRowMap    = _songRowMap.sublist(startOffset);
         _chainRowMap   = _chainRowMap.sublist(startOffset);
