@@ -84,6 +84,9 @@ void main() async {
       s.release,
       s.loopMode,
     );
+    // Push HP/LP filters too so phrase playback is filtered without
+    // needing to open the sampler window first.
+    await NativeAudioEngine.setInstrumentFilters(i, s.hpCutoff, s.lpCutoff);
   }
 
   runApp(LMTApp(initialModel: model));

@@ -799,9 +799,12 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         // Precompute HP/LP Chamberlin SVF coefficients (log-scale freq mapping)
         // HP: hpCutoff 0=bypass (20Hz), 1=max cut (20kHz)
         // LP: lpCutoff 1=bypass (20kHz), 0=max cut (20Hz)
-        // Read atomically — filter params can be updated from UI thread without locking
-        const float hpCutoff = mInstrumentHpCutoff[v].load(std::memory_order_relaxed);
-        const float lpCutoff = mInstrumentLpCutoff[v].load(std::memory_order_relaxed);
+        // Read atomically — filter params can be updated from UI thread without locking.
+        // NOTE: index by voice.instrumentIdx, NOT v.  v is the voice slot (== trackIdx
+        // for sequencer notes via triggerNote, == instrumentIdx for preview via noteOnRegion).
+        // Using v here caused phrase playback to read the wrong instrument's filter.
+        const float hpCutoff = mInstrumentHpCutoff[voice.instrumentIdx].load(std::memory_order_relaxed);
+        const float lpCutoff = mInstrumentLpCutoff[voice.instrumentIdx].load(std::memory_order_relaxed);
         const bool doHp = hpCutoff > 0.001f;
         const bool doLp = lpCutoff < 0.999f;
         // Audio EQ Cookbook biquad LP/HP — Butterworth Q = 1/√2.

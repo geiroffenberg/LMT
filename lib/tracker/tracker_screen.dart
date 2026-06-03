@@ -118,6 +118,8 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       await NativeAudioEngine.setInstrumentPlaybackParams(
         i, s.pitch, s.volume, s.start, s.end, s.attack, s.release, s.loopMode,
       );
+      // Engine resets on init — restore HP/LP filters too.
+      await NativeAudioEngine.setInstrumentFilters(i, s.hpCutoff, s.lpCutoff);
     }
     // Push current mixer + mute state to the engine so the audio side
     // matches the model after init/resume/load.
