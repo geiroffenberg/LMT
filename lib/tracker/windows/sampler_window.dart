@@ -594,9 +594,10 @@ class _SamplerWindowState extends State<SamplerWindow> {
         final fontSize = (_rowH * 0.6).clamp(16.0, 28.0);
         final ts = trackerStyle(size: fontSize);
 
-        return Column(
+        return ListView(
+          padding: EdgeInsets.zero,
           children: [
-            // Header: Waveform display
+            // Waveform display
             Padding(
               padding: const EdgeInsets.all(8),
               child: Container(
@@ -667,13 +668,9 @@ class _SamplerWindowState extends State<SamplerWindow> {
                               }
                             }
                             
-                            // Apply pitch: baseFreq is C4 (261.626 Hz) — same root as C++ kRootHz,
-                            // so at pitch=0 the sample plays at original speed (matching sequencer).
-                            // pitch is stored as -1..1 = -12..+12 semitones, so exponent = pitch (octaves).
                             const baseFreq = 261.626;
                             final pitchFreq = baseFreq * math.pow(2.0, currentSampler.pitch);
-                            // Convert attack/release from 0..1 normalized (0..500ms) to seconds
-                            final attackSec = currentSampler.attack * 0.5;  // 0..1 → 0..500ms → 0..0.5s
+                            final attackSec = currentSampler.attack * 0.5;
                             final releaseSec = currentSampler.release * 0.5;
                             await NativeAudioEngine.noteOnRegion(
                               instrumentIdx,
@@ -779,13 +776,8 @@ class _SamplerWindowState extends State<SamplerWindow> {
               ),
             ),
 
-            // Parameters grid
-            Expanded(
-              child: ListView(
-                padding: EdgeInsets.zero,
-                children: [
-                  // Spacer
-                  SizedBox(height: _rowH),
+            // Spacer to match other windows
+            SizedBox(height: _rowH),
 
                   // Row 1: PITCH
                   _buildParamRow(
@@ -986,11 +978,9 @@ class _SamplerWindowState extends State<SamplerWindow> {
                     fontSize,
                     ts,
                   ),
-                ],
-              ),
-            ),
 
             // Copy to new instrument button
+            SizedBox(height: _rowH),
             GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: () async {
@@ -1037,13 +1027,18 @@ class _SamplerWindowState extends State<SamplerWindow> {
               },
               child: Container(
                 height: _rowH,
-                decoration: const BoxDecoration(
-                  border: Border(top: BorderSide(color: Colors.white, width: 1)),
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
                 alignment: Alignment.center,
-                child: Text(
-                  'COPY TO NEW INSTRUMENT',
-                  style: trackerStyle(size: ((_rowH * 0.6).clamp(16.0, 28.0)) - 4, color: kGreen),
+                child: Container(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.white, width: 1.5),
+                  ),
+                  alignment: Alignment.center,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  child: Text(
+                    'COPY TO NEW INSTRUMENT',
+                    style: trackerStyle(size: ((_rowH * 0.6).clamp(16.0, 28.0)) - 4, color: kGreen),
+                  ),
                 ),
               ),
             ),

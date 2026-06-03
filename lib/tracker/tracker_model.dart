@@ -131,6 +131,10 @@ class TrackerModel {
   // Playback state
   bool isPlaying = false;
   bool isLooping = false;
+
+  // Phrase window — remembered last values for quick insert
+  int lastPhraseNote       = 60; // C-4
+  int lastPhraseInstrument = 1;
   List<double> audioLevels = List.filled(8, 0.0); // linear peak 0..1 per channel
   double masterPeak = 0.0;                         // post-limiter master bus peak 0..1
 

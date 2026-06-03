@@ -128,7 +128,18 @@ class PhraseWindow extends StatelessWidget {
                               model.cursorRow = row;
                               model.cursorCol = col;
 
-                              if (isFxNameCol && isDouble) {
+                              if (colIdx == 0) {
+                                // IN column
+                                if (isDouble && step.instrument == 0) {
+                                  // Double-tap on empty instrument: insert last used
+                                  step.instrument = model.lastPhraseInstrument;
+                                } else if (step.instrument > 0) {
+                                  // Landing on existing instrument: remember it
+                                  model.lastPhraseInstrument = step.instrument;
+                                }
+                                model.enterEditMode();
+                                model.editMenuVisible = true;
+                              } else if (isFxNameCol && isDouble) {
                                 // Double-tap on FX name: show picker
                                 final fxIdx = (colIdx - 2) ~/ 2;
                                 final picked = await showFxCommandPicker(context, isPhrase: true);
@@ -181,10 +192,12 @@ class PhraseWindow extends StatelessWidget {
         model.cursorRow = row;
         model.cursorCol = 0;
         if (isDouble && step.note < 0) {
-          // Double-tap on empty note: insert C-4
-          step.note = 60;
-          // Preview the inserted note if an instrument is assigned
+          // Double-tap on empty note: insert last used note (default C-4)
+          step.note = model.lastPhraseNote;
           onNotePreview?.call();
+        } else if (step.note >= 0) {
+          // Landing on existing note: remember it for next insert
+          model.lastPhraseNote = step.note;
         }
         model.enterEditMode();
         model.editMenuVisible = true;
