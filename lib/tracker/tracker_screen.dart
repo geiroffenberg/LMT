@@ -31,6 +31,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   late TrackerModel model;
   final List<String> windowNames = ['S', 'C', 'P', 'I', 'M'];
   int _samplerInstrumentOpen = -1;  // -1 = no sampler open, >=0 = instrument index
+  int _playbackWindow = 0; // 0=song, 1=chain, 2=phrase — captured at play-press
   Timer? _stepTimer;
   Timer? _meterTimer;
 
@@ -39,7 +40,6 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   List<int> _chainRowMap   = [];  // C++ row index → chain slot number
   List<int> _phraseStepMap = [];  // C++ row index → phrase step number
   int _currentStepIndex    = 0;   // current position in C++ queue
-  int _playbackWindow      = 0;   // window that triggered play (0=song, 1=chain, 2=phrase)
   Timer? _autoSaveTimer;
   final FocusNode _keyListenerFocusNode = FocusNode();
 
@@ -47,16 +47,6 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   int _songCursorRow       = 0;
   int _songCursorCol       = 0;
   bool _songCellWasEmpty   = true; // true when saved cell had no chain ref
-
-  // Saved chain-view cursor — persists through phrase/instrument/mixer visits
-  int _chainCursorRow      = 0;
-  int _chainCursorCol      = 0;
-
-  // Saved chain index — persists when navigating from chain to phrase and back
-  int _savedChainIdx       = 0;
-  
-  // Saved phrase index — persists when navigating from phrase to other views and back
-  int _savedPhraseIdx      = 0;
 
   @override
   void initState() {
@@ -84,20 +74,11 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Stop playback when the app is backgrounded so the loop doesn't keep
-    // running in the background (and can't be stopped on return).
+    // Save when the app is backgrounded or the process is about to be killed
     if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.hidden ||
         state == AppLifecycleState.detached) {
-      if (model.isPlaying) {
-        model.stopPlayback();
-      }
-      _stepTimer?.cancel();
-      _stepTimer = null;
-      NativeAudioEngine.clearQueue();
-      NativeAudioEngine.stopAll();
-      if (mounted) setState(() {});
+      // Autosave disabled
+      // _autoSave();
     }
     // Reinitialize the native audio engine when the app comes back to the
     // foreground — the Oboe stream may have been released while backgrounded.
@@ -109,15 +90,13 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   Future<void> _reinitAudio() async {
     await NativeAudioEngine.initialize();
     for (int i = 0; i < model.instruments.length; i++) {
-      final instr = model.instruments[i];
-      if (instr.sample.isNotEmpty) {
-        await NativeAudioEngine.loadSample(i, instr.sample);
+      final samplePath = model.instruments[i].sample;
+      if (samplePath.isNotEmpty) {
+        await NativeAudioEngine.loadSample(i, samplePath);
       }
-      // Restore sampler params (start/end/attack/release/loop/pitch/vol)
-      final s = instr.sampler;
-      await NativeAudioEngine.setInstrumentPlaybackParams(
-        i, s.pitch, s.volume, s.start, s.end, s.attack, s.release, s.loopMode,
-      );
+      // Engine resets on init — restore HP/LP filters from the model.
+      final s = model.instruments[i].sampler;
+      await NativeAudioEngine.setInstrumentFilters(i, s.hpCutoff, s.lpCutoff);
     }
     // Push current mixer + mute state to the engine so the audio side
     // matches the model after init/resume/load.
@@ -156,14 +135,11 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     final instIdx = step.instrument;
     final noteVal = step.note;
 
-    // Only play if instrument is assigned and note is valid (0-120)
     if (instIdx <= 0 || noteVal < 0 || noteVal > 120) return;
 
-    final int nativeIdx = instIdx - 1; // instrument is 1-indexed in model
+    final int nativeIdx = instIdx - 1;
     final freq = 440.0 * math.pow(2.0, (noteVal - 69) / 12.0);
     final vol  = step.volume > 0 ? step.volume / 99.0 : 0.8;
-
-    // Use sampler params so start/end/attack/release/loop are respected
     final s = model.instruments[nativeIdx].sampler;
     NativeAudioEngine.noteOnRegion(
       nativeIdx,
@@ -201,17 +177,20 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   /// mute/solo (or other "structural" edits) take effect on the next row.
   Future<void> _reenqueueFromPlayhead() async {
     if (!model.isPlaying) return;
-    final data = _playbackWindow == 2
-        ? model.buildPhraseData(model.activePhraseIdx)
-        : _playbackWindow == 1
-            ? model.buildChainData(model.activeChainIdx)
-            : model.buildPlaybackData(startRow: model.playheadRow);
-    if (data.rows.isEmpty) return;
+    late final dynamic data;
+    if (_playbackWindow == 2) {
+      data = model.buildPhraseData(model.activePhraseIdx);
+    } else if (_playbackWindow == 1) {
+      data = model.buildChainData(model.activeChainIdx);
+    } else {
+      data = model.buildPlaybackData(startRow: model.playheadRow);
+    }
+    if ((data.rows as List).isEmpty) return;
     await NativeAudioEngine.clearQueue();
-    await NativeAudioEngine.enqueueAllRows(model.isLooping, data.rows);
-    _songRowMap    = data.songRowMap;
-    _chainRowMap   = data.chainRowMap;
-    _phraseStepMap = data.phraseStepMap;
+    await NativeAudioEngine.enqueueAllRows(model.isLooping, data.rows as List<Map<String, dynamic>>);
+    _songRowMap    = List<int>.from(data.songRowMap as List);
+    _chainRowMap   = List<int>.from(data.chainRowMap as List);
+    _phraseStepMap = List<int>.from(data.phraseStepMap as List);
     _currentStepIndex = 0;
   }
 
@@ -223,18 +202,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         setState(() {
           // Map step index → actual song row and chain slot
           if (_songRowMap.isNotEmpty) {
-            final nextIndex = _currentStepIndex + advanced;
-            final wrapped = nextIndex % _songRowMap.length;
-            
-            // If we wrapped AND loop is off, stop playback
-            if (nextIndex >= _songRowMap.length && !model.isLooping) {
-              model.stopPlayback();
-              _stepTimer?.cancel();
-              _stepTimer = null;
-              return;
-            }
-            
-            _currentStepIndex = wrapped;
+            _currentStepIndex = (_currentStepIndex + advanced) % _songRowMap.length;
             model.playheadRow      = _songRowMap[_currentStepIndex];
             model.playheadChainRow = _chainRowMap[_currentStepIndex];
             model.phraseStep       = _phraseStepMap.isNotEmpty ? _phraseStepMap[_currentStepIndex] : 0;
@@ -257,120 +225,30 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       _stepTimer = null;
       setState(() {});
     } else {
+      _playbackWindow = model.currentWindow;
       model.startPlayback();
       _currentStepIndex = 0;
-      _playbackWindow   = model.currentWindow;
 
-      // Playback rules — all 8 tracks always play; Solo/Mute to isolate.
-      //   Song view  → play whole song from cursor row. Loop wraps to row 0.
-      //   Chain view → find the song row containing this chain, play the full
-      //                arrangement for that row (all tracks). Start at cursor slot.
-      //   Phrase view → find the song row + chain slot containing this phrase,
-      //                 play the full arrangement (all tracks).
-      late final ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap}) data;
-      int startOffset = 0;
-
+      late final dynamic data;
       if (_playbackWindow == 2) {
-        // Phrase view: locate song row + chain slot that references this phrase
-        final phraseRef = model.activePhraseIdx + 1;
-        int foundRow = -1, foundSlot = -1;
-        outer:
-        for (int r = 0; r < model.song.chains.length; r++) {
-          if (model.isSongRowEmpty(r)) break;
-          for (int t = 0; t < 8; t++) {
-            final chainRef = model.song.chains[r][t];
-            if (chainRef <= 0) continue;
-            final items = model.chains[chainRef - 1].items;
-            for (int s = 0; s < items.length; s++) {
-              if (items[s].phrase == phraseRef) {
-                foundRow = r; foundSlot = s;
-                break outer;
-              }
-            }
-          }
-        }
-        if (foundRow >= 0) {
-          data = model.buildPlaybackData(startRow: foundRow);
-          // Find offset for chain slot foundSlot, step 0
-          for (int i = 0; i < data.chainRowMap.length; i++) {
-            if (data.songRowMap[i] == foundRow && data.chainRowMap[i] == foundSlot && data.phraseStepMap[i] == 0) {
-              startOffset = i; break;
-            }
-          }
-        } else {
-          // Fallback: phrase isn't placed in song; play it solo on track 0
-          final rows = model.buildPhraseRows(model.activePhraseIdx);
-          data = (rows: rows,
-                  songRowMap: List.filled(rows.length, 0),
-                  chainRowMap: List.filled(rows.length, 0),
-                  phraseStepMap: List.generate(rows.length, (i) => i));
-        }
+        data = model.buildPhraseData(model.activePhraseIdx);
       } else if (_playbackWindow == 1) {
-        // Chain view: locate song row that references this chain
-        final chainRef = model.activeChainIdx + 1;
-        int foundRow = -1;
-        outer:
-        for (int r = 0; r < model.song.chains.length; r++) {
-          if (model.isSongRowEmpty(r)) break;
-          for (int t = 0; t < 8; t++) {
-            if (model.song.chains[r][t] == chainRef) { foundRow = r; break outer; }
-          }
-        }
-        if (foundRow >= 0) {
-          data = model.buildPlaybackData(startRow: foundRow);
-          // Start at cursor slot within this song row
-          for (int i = 0; i < data.chainRowMap.length; i++) {
-            if (data.songRowMap[i] == foundRow &&
-                data.chainRowMap[i] == model.cursorRow &&
-                data.phraseStepMap[i] == 0) {
-              startOffset = i; break;
-            }
-          }
-        } else {
-          // Fallback: chain isn't placed in song; play it solo on track 0
-          data = model.buildChainData(model.activeChainIdx);
-        }
+        data = model.buildChainData(model.activeChainIdx);
       } else {
-        // Song view
-        data = model.buildPlaybackData(startRow: 0);
-        for (int i = 0; i < data.songRowMap.length; i++) {
-          if (data.songRowMap[i] == model.cursorRow) { startOffset = i; break; }
-        }
+        data = model.buildPlaybackData(startRow: model.cursorRow);
       }
 
-      _songRowMap    = data.songRowMap;
-      _chainRowMap   = data.chainRowMap;
-      _phraseStepMap = data.phraseStepMap;
+      _songRowMap    = List<int>.from(data.songRowMap as List);
+      _chainRowMap   = List<int>.from(data.chainRowMap as List);
+      _phraseStepMap = List<int>.from(data.phraseStepMap as List);
+      model.playheadRow = _playbackWindow == 0 ? model.cursorRow : 0;
 
-      // Rotate or trim based on loop state.
-      List<Map<String, dynamic>> playRows;
-      if (model.isLooping && startOffset > 0) {
-        playRows = [
-          ...data.rows.sublist(startOffset),
-          ...data.rows.sublist(0, startOffset),
-        ];
-        _songRowMap    = [..._songRowMap.sublist(startOffset),    ..._songRowMap.sublist(0, startOffset)];
-        _chainRowMap   = [..._chainRowMap.sublist(startOffset),   ..._chainRowMap.sublist(0, startOffset)];
-        _phraseStepMap = [..._phraseStepMap.sublist(startOffset), ..._phraseStepMap.sublist(0, startOffset)];
-      } else if (!model.isLooping && startOffset > 0) {
-        playRows       = data.rows.sublist(startOffset);
-        _songRowMap    = _songRowMap.sublist(startOffset);
-        _chainRowMap   = _chainRowMap.sublist(startOffset);
-        _phraseStepMap = _phraseStepMap.sublist(startOffset);
-      } else {
-        playRows = data.rows;
-      }
-      _currentStepIndex = 0;
-
-      model.playheadRow      = _playbackWindow == 0 ? model.cursorRow : 0;
-      model.playheadChainRow = _playbackWindow == 1 ? model.cursorRow : 0;
-
-      if (playRows.isEmpty) {
+      if ((data.rows as List).isEmpty) {
         model.stopPlayback();
         setState(() {});
         return;
       }
-      await NativeAudioEngine.enqueueAllRows(model.isLooping, playRows);
+      await NativeAudioEngine.enqueueAllRows(model.isLooping, data.rows as List<Map<String, dynamic>>);
       _startPollTimer();
       setState(() {});
     }
@@ -382,17 +260,11 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     model.clearLineSelection();
     final fromWindow = model.currentWindow;
 
-    // ── Save cursor whenever leaving song or chain view ───────────────────
+    // ── Save song cursor whenever leaving song view ────────────────────────
     if (fromWindow == 0) {
       _songCursorRow    = model.cursorRow;
       _songCursorCol    = model.cursorCol;
       _songCellWasEmpty = model.song.chains[model.cursorRow][model.cursorCol] <= 0;
-    } else if (fromWindow == 1) {
-      _chainCursorRow   = model.cursorRow;
-      _chainCursorCol   = model.cursorCol;
-      _savedChainIdx    = model.activeChainIdx;
-    } else if (fromWindow == 2) {
-      _savedPhraseIdx   = model.activePhraseIdx;
     }
 
     // ── Forward navigation rules ─────────────────────────────────────────
@@ -403,9 +275,6 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         final chainRef = model.song.chains[model.cursorRow][model.cursorCol];
         if (chainRef <= 0) return;
         model.activeChainIdx = chainRef - 1;
-      } else if (fromWindow == 2) {
-        // From phrase: restore saved chain index
-        model.activeChainIdx = _savedChainIdx;
       } else if (fromWindow == 3 || fromWindow == 4) {
         // From instrument/mixer: use saved song cursor.
         if (_songCellWasEmpty) return;
@@ -413,7 +282,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         if (chainRef <= 0) return;
         model.activeChainIdx = chainRef - 1;
       }
-      // From Chain itself: always allowed, activeChainIdx already set.
+      // From Phrase or Chain itself: always allowed, activeChainIdx already set.
     }
     // Phrase window
     else if (windowIndex == 2) {
@@ -424,8 +293,9 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       } else if (fromWindow == 0) {
         return; // must go Song → Chain first
       } else if (fromWindow == 3 || fromWindow == 4) {
-        // From instrument/mixer: restore saved phrase index
-        model.activePhraseIdx = _savedPhraseIdx;
+        // From instrument/mixer: block if the saved song cell had no chain.
+        if (_songCellWasEmpty) return;
+        // Otherwise allow — activeChainIdx/activePhraseIdx from prior navigation.
       }
       // From Phrase itself: always allowed.
     }
@@ -458,10 +328,6 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         }
         if (!found) { model.cursorRow = 0; model.cursorCol = 0; }
       }
-    } else if (windowIndex == 1) {
-      // Chain window: restore cursor to the phrase row the user selected
-      model.cursorRow = _chainCursorRow;
-      model.cursorCol = _chainCursorCol;
     } else {
       model.cursorRow = 0;
       model.cursorCol = 0;
@@ -1019,37 +885,6 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       case 'SAVE AS...':
         final newName = await _showProjectNameDialog('SAVE AS');
         if (newName != null && newName.isNotEmpty) {
-          // Warn if a project with that name already exists
-          final existing = await ProjectManager.listProjects();
-          final clash = existing.any((d) =>
-              ProjectManager.getProjectName(d).toLowerCase() == newName.toLowerCase());
-          if (clash && mounted) {
-            final overwrite = await showDialog<bool>(
-              context: context,
-              builder: (ctx) => AlertDialog(
-                backgroundColor: Colors.black,
-                title: Text('OVERWRITE?',
-                    style: trackerStyle(size: 20, color: Colors.red)),
-                content: Text(
-                  'A project named "$newName" already exists. Overwrite it?',
-                  style: trackerStyle(size: 16, color: Colors.white),
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(ctx, false),
-                    child: Text('Cancel',
-                        style: trackerStyle(size: 18, color: Colors.white54)),
-                  ),
-                  TextButton(
-                    onPressed: () => Navigator.pop(ctx, true),
-                    child: Text('Overwrite',
-                        style: trackerStyle(size: 18, color: Colors.red)),
-                  ),
-                ],
-              ),
-            );
-            if (overwrite != true) break;
-          }
           final saveOk = await ProjectManager.saveProject(newName, model);
           if (!mounted) return;
           // Note: ProjectManager.saveProject already calls model.setCurrentProject
@@ -1160,10 +995,6 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       // Load the project
       final loadedModel = await ProjectManager.loadProject(projectDir);
       if (loadedModel == null) throw Exception('Could not parse project data');
-      loadedModel.setCurrentProject(
-        ProjectManager.getProjectName(projectDir),
-        projectDir.path,
-      );
 
       if (!mounted) return;
       Navigator.of(context, rootNavigator: true).pop(); // close spinner
@@ -1183,6 +1014,9 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         if (samplePath.isNotEmpty) {
           await NativeAudioEngine.loadSample(i, samplePath);
         }
+        // Restore HP/LP filters from the loaded project's sampler params.
+        final s = loadedModel.instruments[i].sampler;
+        await NativeAudioEngine.setInstrumentFilters(i, s.hpCutoff, s.lpCutoff);
       }
 
       if (!mounted) return;
@@ -1192,7 +1026,6 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         _currentStepIndex = 0;
         _songRowMap = [];
         _chainRowMap = [];
-        _phraseStepMap = [];
       });
       model.clearUndoHistory();
       _syncMixerSendsToNative();
@@ -1447,12 +1280,6 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     final loadedModel = await ProjectManager.loadProject(selectedDir);
     if (loadedModel == null || !mounted) return;
 
-    // Title bar should reflect the loaded project
-    loadedModel.setCurrentProject(
-      ProjectManager.getProjectName(selectedDir),
-      selectedDir.path,
-    );
-
     // Stop any active playback before replacing model
     if (model.isPlaying) {
       model.stopPlayback();
@@ -1468,6 +1295,9 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       if (samplePath.isNotEmpty) {
         await NativeAudioEngine.loadSample(i, samplePath);
       }
+      // Restore HP/LP filters from the loaded project's sampler params.
+      final s = loadedModel.instruments[i].sampler;
+      await NativeAudioEngine.setInstrumentFilters(i, s.hpCutoff, s.lpCutoff);
     }
 
     if (!mounted) return;
@@ -1477,7 +1307,6 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       _currentStepIndex = 0;
       _songRowMap = [];
       _chainRowMap = [];
-      _phraseStepMap = [];
     });
     model.clearUndoHistory();
     _syncMixerSendsToNative();
@@ -1777,16 +1606,16 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         : ['−', '+', '−10', '+10'];
 
     // Song window: REP + DEL
-    // Chain window PH column with data: REP + DEL + X
     // Phrase note column: OFF + END + DEL + X
     // Phrase other columns: CPY + CUT + PST + DEL + X
     // Chain / Instrument / Mixer: just DEL + X (+/- in line 1 is enough)
-    final isChainPhCol = model.currentWindow == 1 && model.cursorCol == 0 &&
-        model.chains[model.activeChainIdx].items[model.cursorRow].phrase > 0;
     final line2Items = model.currentWindow == 0
         ? ['CLO', 'DEL', 'X']
-        : isChainPhCol
-            ? ['CLO', 'DEL', 'X']
+        : model.currentWindow == 1
+            ? (model.cursorCol == 0 &&
+                      model.chains[model.activeChainIdx].items[model.cursorRow].phrase > 0
+                  ? ['CLO', 'DEL', 'X']
+                  : ['DEL', 'X'])
             : model.currentWindow == 2
                 ? (isNoteColumn
                     ? ['OFF', 'END', 'DEL', 'X']

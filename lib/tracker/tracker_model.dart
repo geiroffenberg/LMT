@@ -28,7 +28,8 @@ class ChainItem {
 }
 
 class Phrase {
-  final List<PhraseStep> steps = List.generate(99, (i) => PhraseStep()..note = (i == 16 ? PhraseStep.noteEnd : PhraseStep.noteNone));
+  final List<PhraseStep> steps = List.generate(
+      99, (i) => PhraseStep()..note = (i == 16 ? PhraseStep.noteEnd : PhraseStep.noteNone));
   int length = 16; // Number of active steps (1-99)
 }
 
@@ -131,10 +132,6 @@ class TrackerModel {
   // Playback state
   bool isPlaying = false;
   bool isLooping = false;
-
-  // Phrase window — remembered last values for quick insert
-  int lastPhraseNote       = 60; // C-4
-  int lastPhraseInstrument = 1;
   List<double> audioLevels = List.filled(8, 0.0); // linear peak 0..1 per channel
   double masterPeak = 0.0;                         // post-limiter master bus peak 0..1
 
@@ -365,7 +362,7 @@ class TrackerModel {
   }
 
   /// Returns the smallest phrase number (1-99) whose phrase data is completely
-  /// empty (all steps have note == noteNone or noteEnd), or -1 if all are in use.
+  /// empty (all steps have note == noteNone), or -1 if all are in use.
   int firstAvailablePhrase() {
     for (int i = 0; i < 99; i++) {
       if (_isPhraseEmpty(i)) return i + 1;
@@ -458,6 +455,17 @@ class TrackerModel {
   /// M8-style: each phrase referenced by the source chain is also duplicated into a
   /// new empty phrase number, and the new chain's slots are remapped to those copies.
   /// Phrases listed multiple times in the source chain are deduplicated (one copy each).
+  void replicatePhrase() {
+    if (currentWindow != 1) return;
+    final sourcePhraseNum = chains[activeChainIdx].items[cursorRow].phrase;
+    if (sourcePhraseNum <= 0 || sourcePhraseNum > 99) return;
+    final targetPhraseNum = firstAvailablePhrase();
+    if (targetPhraseNum <= 0) return;
+    _copyPhrase(sourcePhraseNum - 1, targetPhraseNum - 1);
+    chains[activeChainIdx].items[cursorRow].phrase = targetPhraseNum;
+    activePhraseIdx = targetPhraseNum - 1;
+  }
+
   void replicateChain() {
     if (currentWindow != 0) return; // Only for Song window
 
@@ -503,22 +511,6 @@ class TrackerModel {
 
     // Update the current cell to point to the new chain
     song.chains[cursorRow][cursorCol] = targetChainNum;
-  }
-
-  /// Replicate the phrase in the current chain row: copy it to the first free
-  /// phrase slot and update the chain cell to point to the new phrase.
-  void replicatePhrase() {
-    if (currentWindow != 1) return;
-
-    final sourcePhraseNum = chains[activeChainIdx].items[cursorRow].phrase;
-    if (sourcePhraseNum <= 0 || sourcePhraseNum > 99) return;
-
-    final targetPhraseNum = firstAvailablePhrase();
-    if (targetPhraseNum <= 0) return;
-
-    _copyPhrase(sourcePhraseNum - 1, targetPhraseNum - 1);
-    chains[activeChainIdx].items[cursorRow].phrase = targetPhraseNum;
-    activePhraseIdx = targetPhraseNum - 1;
   }
 
   /// Call this from a BPM timer.
@@ -572,6 +564,8 @@ class TrackerModel {
   int activeChainIdx  = 0;  // 0-based index into model.chains
   int activePhraseIdx = 0;  // 0-based index into model.phrases
   int cursorRow = 0;
+  int lastPhraseNote = 60;
+  int lastPhraseInstrument = 1;
   int cursorCol = 0;
   int scrollRow = 0;
 
@@ -989,9 +983,8 @@ class TrackerModel {
         applyEdit(copyBuffer);
       }
     } else if (action == 'CLO') {
-      if (currentWindow == 0) {
-        replicateChain();
-      } else if (currentWindow == 1) replicatePhrase();
+      if (currentWindow == 0) replicateChain();
+      else if (currentWindow == 1) replicatePhrase();
     } else if (action == 'OFF') {
       // Note off marker — only meaningful in phrase note column
       if (currentWindow == 2 && cursorCol == 0) {
@@ -1175,83 +1168,6 @@ class TrackerModel {
   }
 
   // -----------------------------------------------------------------------
-  // Build C++ rows for a single chain (chain view playback).
-  // Plays chain [chainIdx] on track 0; tracks 1-7 are silent.
-  // -----------------------------------------------------------------------
-  ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap})
-      buildChainData(int chainIdx, {int startSlot = 0}) {
-    final rows          = <Map<String, dynamic>>[];
-    final songRowMap    = <int>[];
-    final chainRowMap   = <int>[];
-    final phraseStepMap = <int>[];
-
-    int currentBpm = song.bpm;
-    int currentLpb = song.lpb;
-
-    final chainItems = chains[chainIdx].items.where((ci) => ci.phrase != 0).toList();
-    final clampedStart = startSlot.clamp(0, chainItems.isEmpty ? 0 : chainItems.length - 1);
-    for (int slot = clampedStart; slot < chainItems.length; slot++) {
-      final ci = chainItems[slot];
-      for (final fx in ci.fx) {
-        if (fx.name == 'BPM') {
-          currentBpm = fxValToBpm(fx.value);
-        } else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
-      }
-      final ph  = phrases[ci.phrase - 1];
-      final len = _getPhraseLen(ph);
-      if (len == 0) continue;
-
-      for (int step = 0; step < len; step++) {
-        final ps = ph.steps[step];
-        if (ps.note == PhraseStep.noteEnd) break;
-        for (final fx in ps.fx) {
-          if (fx.name == 'BPM') {
-            currentBpm = fxValToBpm(fx.value);
-          } else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
-        }
-        final int lineSamples = (48000.0 * 60.0 / (currentBpm * currentLpb)).round();
-
-        int instrIdx = ps.instrument > 0 ? ps.instrument - 1 : -1;
-        int midiNote = ps.note;
-        if (instrIdx >= 0 && midiNote >= 0 && ci.transpose != 0) {
-          final int semitones = ci.transpose <= 12 ? ci.transpose : ci.transpose - 100;
-          midiNote = (midiNote + semitones).clamp(0, 120);
-        }
-        final fxIds  = [0, 0, 0];
-        final fxVals = [0, 0, 0];
-        for (int i = 0; i < ps.fx.length && i < 3; i++) {
-          fxIds[i]  = _fxIdForC(ps.fx[i].name);
-          fxVals[i] = ps.fx[i].value;
-        }
-        final noteData = <int>[instrIdx, midiNote, ps.volume];
-        for (int i = 0; i < 3; i++) { noteData.add(fxIds[i]); noteData.add(fxVals[i]); }
-        for (int t = 1; t < 8; t++) { noteData.addAll([-1, -1, -1, 0, 0, 0, 0, 0, 0]); }
-
-        rows.add({'lineSamples': lineSamples, 'noteData': noteData});
-        songRowMap.add(0);
-        chainRowMap.add(slot);
-        phraseStepMap.add(step);
-      }
-    }
-    return (rows: rows, songRowMap: songRowMap, chainRowMap: chainRowMap, phraseStepMap: phraseStepMap);
-  }
-
-  // -----------------------------------------------------------------------
-  // Build C++ rows for a single phrase (phrase view playback).
-  // -----------------------------------------------------------------------
-  ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap})
-      buildPhraseData(int phraseIdx) {
-    final rows = buildPhraseRows(phraseIdx);
-    final n = rows.length;
-    return (
-      rows: rows,
-      songRowMap: List.filled(n, 0),
-      chainRowMap: List.filled(n, 0),
-      phraseStepMap: List.generate(n, (i) => i),
-    );
-  }
-
-  // -----------------------------------------------------------------------
   // Build all C++ rows for Song playback starting from [startRow].
   // Returns rows + a parallel songRowMap (which song row each C++ row belongs to)
   // so the Dart poll timer can update playheadRow correctly.
@@ -1269,12 +1185,11 @@ class TrackerModel {
     return kFxId[name] ?? 0;
   }
 
-  ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap})
+  ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap})
       buildPlaybackData({int startRow = 0}) {
-    final rows          = <Map<String, dynamic>>[];
-    final songRowMap    = <int>[];  // parallel: rows[i] belongs to song row songRowMap[i]
-    final chainRowMap   = <int>[];  // parallel: rows[i] belongs to chain slot chainRowMap[i]
-    final phraseStepMap = <int>[];  // parallel: rows[i] belongs to phrase step phraseStepMap[i]
+    final rows        = <Map<String, dynamic>>[];
+    final songRowMap  = <int>[];  // parallel: rows[i] belongs to song row songRowMap[i]
+    final chainRowMap = <int>[];  // parallel: rows[i] belongs to chain slot chainRowMap[i]
 
     int currentBpm = song.bpm;
     int currentLpb = song.lpb;
@@ -1417,12 +1332,11 @@ class TrackerModel {
           rows.add({'lineSamples': lineSamples, 'noteData': noteData});
           songRowMap.add(songRow);
           chainRowMap.add(slot);
-          phraseStepMap.add(step);
         }
       }
     }
 
-    return (rows: rows, songRowMap: songRowMap, chainRowMap: chainRowMap, phraseStepMap: phraseStepMap);
+    return (rows: rows, songRowMap: songRowMap, chainRowMap: chainRowMap);
   }
 
   // -----------------------------------------------------------------------
@@ -1459,6 +1373,82 @@ class TrackerModel {
   // Legacy alias kept so existing callers don't break
   List<Map<String, dynamic>> buildPlaybackRows({int startRow = 0}) =>
       buildPlaybackData(startRow: startRow).rows;
+
+  /// Build playback data for a single chain (track 0 only, tracks 1-7 silent).
+  ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap})
+  buildChainData(int chainIdx) {
+    final rows         = <Map<String, dynamic>>[];
+    final songRowMap   = <int>[];
+    final chainRowMap  = <int>[];
+    final phraseStepMap = <int>[];
+    int currentBpm = song.bpm;
+    int currentLpb = song.lpb;
+    final chain = chains[chainIdx];
+    for (int slot = 0; slot < chain.items.length; slot++) {
+      final ci = chain.items[slot];
+      if (ci.phrase == 0) break;
+      final ph = phrases[ci.phrase - 1];
+      final phraseLen = _getPhraseLen(ph);
+      for (int step = 0; step < phraseLen; step++) {
+        final ps = ph.steps[step];
+        if (ps.note == PhraseStep.noteEnd) break;
+        for (final fx in ci.fx) {
+          if (fx.name == 'BPM') currentBpm = fxValToBpm(fx.value);
+          else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
+        }
+        final lineSamples = (48000 * 60) ~/ (currentBpm * currentLpb);
+        final noteData = <int>[];
+        final note = ps.note + ci.transpose;
+        if (ps.note > 0 && note >= 0 && note <= 127) {
+          final instrIdx = (ps.instrument - 1).clamp(0, 98);
+          final vol = ps.volume > 0 ? ps.volume : 80;
+          noteData.addAll([instrIdx, note, vol, 0, 0, 0, 0, 0, 0]);
+        } else {
+          noteData.addAll([-1, -1, -1, 0, 0, 0, 0, 0, 0]);
+        }
+        for (int t = 1; t < 8; t++) {
+          noteData.addAll([-1, -1, -1, 0, 0, 0, 0, 0, 0]);
+        }
+        rows.add({'lineSamples': lineSamples, 'noteData': noteData});
+        songRowMap.add(0);
+        chainRowMap.add(slot);
+        phraseStepMap.add(step);
+      }
+    }
+    return (rows: rows, songRowMap: songRowMap, chainRowMap: chainRowMap, phraseStepMap: phraseStepMap);
+  }
+
+  /// Build playback data for a single phrase (track 0 only).
+  ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap})
+  buildPhraseData(int phraseIdx) {
+    final rows          = <Map<String, dynamic>>[];
+    final songRowMap    = <int>[];
+    final chainRowMap   = <int>[];
+    final phraseStepMap = <int>[];
+    final ph = phrases[phraseIdx];
+    final phraseLen = _getPhraseLen(ph);
+    final lineSamples = (48000 * 60) ~/ (song.bpm * song.lpb);
+    for (int step = 0; step < phraseLen; step++) {
+      final ps = ph.steps[step];
+      if (ps.note == PhraseStep.noteEnd) break;
+      final noteData = <int>[];
+      if (ps.note > 0 && ps.note <= 127) {
+        final instrIdx = (ps.instrument - 1).clamp(0, 98);
+        final vol = ps.volume > 0 ? ps.volume : 80;
+        noteData.addAll([instrIdx, ps.note, vol, 0, 0, 0, 0, 0, 0]);
+      } else {
+        noteData.addAll([-1, -1, -1, 0, 0, 0, 0, 0, 0]);
+      }
+      for (int t = 1; t < 8; t++) {
+        noteData.addAll([-1, -1, -1, 0, 0, 0, 0, 0, 0]);
+      }
+      rows.add({'lineSamples': lineSamples, 'noteData': noteData});
+      songRowMap.add(0);
+      chainRowMap.add(0);
+      phraseStepMap.add(step);
+    }
+    return (rows: rows, songRowMap: songRowMap, chainRowMap: chainRowMap, phraseStepMap: phraseStepMap);
+  }
 
   // ---------------------------------------------------------------------------
   // WAV export — record-while-playing tap
