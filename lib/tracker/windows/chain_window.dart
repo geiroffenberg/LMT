@@ -128,7 +128,7 @@ class ChainWindow extends StatelessWidget {
                       final bool phraseHasData = col == 0 &&
                           item.phrase > 0 &&
                           model.phrases[item.phrase - 1].steps
-                              .any((s) => s.note != PhraseStep.noteNone);
+                              .any((s) => s.note != PhraseStep.noteNone && s.note != PhraseStep.noteEnd);
                       final cellStyle = phraseHasData
                           ? trackerStyle(size: fontSize, color: kCyan)
                           : ts;

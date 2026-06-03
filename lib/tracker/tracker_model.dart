@@ -432,7 +432,7 @@ class TrackerModel {
 
   /// Returns true if phrase [idx] (0-based) is completely empty.
   bool _isPhraseEmpty(int idx) =>
-      phrases[idx].steps.every((s) => s.note == PhraseStep.noteNone);
+      phrases[idx].steps.every((s) => s.note == PhraseStep.noteNone || s.note == PhraseStep.noteEnd);
 
   /// Deep-copy phrase [srcIdx] → [dstIdx] (both 0-based).
   void _copyPhrase(int srcIdx, int dstIdx) {

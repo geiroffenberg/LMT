@@ -335,6 +335,14 @@ class ProjectManager {
               }
             }
           }
+          // If the phrase has no real notes (saved before END-default was added),
+          // restore the END marker at row 17 (index 16).
+          final hasRealNote = model.phrases[p].steps.any(
+            (s) => s.note != PhraseStep.noteNone && s.note != PhraseStep.noteEnd,
+          );
+          if (!hasRealNote) {
+            model.phrases[p].steps[16].note = PhraseStep.noteEnd;
+          }
         }
       }
     }
