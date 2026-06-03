@@ -1019,6 +1019,37 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       case 'SAVE AS...':
         final newName = await _showProjectNameDialog('SAVE AS');
         if (newName != null && newName.isNotEmpty) {
+          // Warn if a project with that name already exists
+          final existing = await ProjectManager.listProjects();
+          final clash = existing.any((d) =>
+              ProjectManager.getProjectName(d).toLowerCase() == newName.toLowerCase());
+          if (clash && mounted) {
+            final overwrite = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                backgroundColor: Colors.black,
+                title: Text('OVERWRITE?',
+                    style: trackerStyle(size: 20, color: Colors.red)),
+                content: Text(
+                  'A project named "$newName" already exists. Overwrite it?',
+                  style: trackerStyle(size: 16, color: Colors.white),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: Text('Cancel',
+                        style: trackerStyle(size: 18, color: Colors.white54)),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: Text('Overwrite',
+                        style: trackerStyle(size: 18, color: Colors.red)),
+                  ),
+                ],
+              ),
+            );
+            if (overwrite != true) break;
+          }
           final saveOk = await ProjectManager.saveProject(newName, model);
           if (!mounted) return;
           // Note: ProjectManager.saveProject already calls model.setCurrentProject
@@ -1129,6 +1160,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       // Load the project
       final loadedModel = await ProjectManager.loadProject(projectDir);
       if (loadedModel == null) throw Exception('Could not parse project data');
+      loadedModel.setCurrentProject(
+        ProjectManager.getProjectName(projectDir),
+        projectDir.path,
+      );
 
       if (!mounted) return;
       Navigator.of(context, rootNavigator: true).pop(); // close spinner
@@ -1411,6 +1446,12 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
 
     final loadedModel = await ProjectManager.loadProject(selectedDir);
     if (loadedModel == null || !mounted) return;
+
+    // Title bar should reflect the loaded project
+    loadedModel.setCurrentProject(
+      ProjectManager.getProjectName(selectedDir),
+      selectedDir.path,
+    );
 
     // Stop any active playback before replacing model
     if (model.isPlaying) {

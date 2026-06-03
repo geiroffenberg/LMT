@@ -45,6 +45,12 @@ void main() async {
   if (projectToLoad != null) {
     print('Loading project: ${projectToLoad.path}');
     model = await ProjectManager.loadProject(projectToLoad);
+    if (model != null) {
+      model.setCurrentProject(
+        ProjectManager.getProjectName(projectToLoad),
+        projectToLoad.path,
+      );
+    }
   }
 
   if (model == null) {
