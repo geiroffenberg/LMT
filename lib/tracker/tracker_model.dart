@@ -989,8 +989,9 @@ class TrackerModel {
         applyEdit(copyBuffer);
       }
     } else if (action == 'CLO') {
-      if (currentWindow == 0) replicateChain();
-      else if (currentWindow == 1) replicatePhrase();
+      if (currentWindow == 0) {
+        replicateChain();
+      } else if (currentWindow == 1) replicatePhrase();
     } else if (action == 'OFF') {
       // Note off marker — only meaningful in phrase note column
       if (currentWindow == 2 && cursorCol == 0) {
@@ -1191,8 +1192,9 @@ class TrackerModel {
     for (int slot = 0; slot < chainItems.length; slot++) {
       final ci = chainItems[slot];
       for (final fx in ci.fx) {
-        if (fx.name == 'BPM') currentBpm = fxValToBpm(fx.value);
-        else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
+        if (fx.name == 'BPM') {
+          currentBpm = fxValToBpm(fx.value);
+        } else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
       }
       final ph  = phrases[ci.phrase - 1];
       final len = _getPhraseLen(ph);
@@ -1202,8 +1204,9 @@ class TrackerModel {
         final ps = ph.steps[step];
         if (ps.note == PhraseStep.noteEnd) break;
         for (final fx in ps.fx) {
-          if (fx.name == 'BPM') currentBpm = fxValToBpm(fx.value);
-          else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
+          if (fx.name == 'BPM') {
+            currentBpm = fxValToBpm(fx.value);
+          } else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
         }
         final int lineSamples = (48000.0 * 60.0 / (currentBpm * currentLpb)).round();
 

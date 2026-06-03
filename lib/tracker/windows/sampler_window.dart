@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:async';
 import 'dart:typed_data';
 import 'dart:math' as math;
+import 'package:path_provider/path_provider.dart';
 import '../tracker_model.dart';
 import '../tracker_styles.dart';
 import '../models/sampler_params.dart';
@@ -279,11 +280,14 @@ class _SamplerWindowState extends State<SamplerWindow> {
         wavOut.setInt16(44 + f * 2, outSamples[f], Endian.little);
       }
 
-      // ── Choose output filename: <base>_crop_N.wav ────────────────────────
+      // ── Choose output filename: <base>_crop_N.wav (in app docs dir) ─────
       final srcName = sampler.sampleName ?? srcPath.split(Platform.pathSeparator).last;
       final dot  = srcName.lastIndexOf('.');
       final base = dot > 0 ? srcName.substring(0, dot) : srcName;
-      final dir  = srcPath.substring(0, srcPath.lastIndexOf(Platform.pathSeparator));
+      // Write to the app's documents directory (always writable on Android)
+      final docsDir = await getApplicationDocumentsDirectory();
+      final dir = '${docsDir.path}/samples';
+      await Directory(dir).create(recursive: true);
       int n = 1;
       String outName;
       do {
@@ -420,11 +424,14 @@ class _SamplerWindowState extends State<SamplerWindow> {
         wavOut.setInt16(44 + f * 2, outSamples[f], Endian.little);
       }
 
-      // ─── Choose output filename: <base>_chop_N.wav ────────────────────────
+      // ─── Choose output filename: <base>_chop_N.wav (in app docs dir) ─────
       final srcName = sampler.sampleName ?? srcPath.split(Platform.pathSeparator).last;
       final dot  = srcName.lastIndexOf('.');
       final base = dot > 0 ? srcName.substring(0, dot) : srcName;
-      final dir  = srcPath.substring(0, srcPath.lastIndexOf(Platform.pathSeparator));
+      // Write to the app's documents directory (always writable on Android)
+      final docsDir = await getApplicationDocumentsDirectory();
+      final dir = '${docsDir.path}/samples';
+      await Directory(dir).create(recursive: true);
       int n = 1;
       String outName;
       do {
