@@ -1179,7 +1179,7 @@ class TrackerModel {
   // Plays chain [chainIdx] on track 0; tracks 1-7 are silent.
   // -----------------------------------------------------------------------
   ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap})
-      buildChainData(int chainIdx) {
+      buildChainData(int chainIdx, {int startSlot = 0}) {
     final rows          = <Map<String, dynamic>>[];
     final songRowMap    = <int>[];
     final chainRowMap   = <int>[];
@@ -1189,7 +1189,8 @@ class TrackerModel {
     int currentLpb = song.lpb;
 
     final chainItems = chains[chainIdx].items.where((ci) => ci.phrase != 0).toList();
-    for (int slot = 0; slot < chainItems.length; slot++) {
+    final clampedStart = startSlot.clamp(0, chainItems.isEmpty ? 0 : chainItems.length - 1);
+    for (int slot = clampedStart; slot < chainItems.length; slot++) {
       final ci = chainItems[slot];
       for (final fx in ci.fx) {
         if (fx.name == 'BPM') {

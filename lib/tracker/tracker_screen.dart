@@ -252,38 +252,65 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       _currentStepIndex = 0;
       _playbackWindow   = model.currentWindow;
 
+      // Playback rules:
+      //   Song view  → play from cursor row. With loop ON, after end wraps to row 0
+      //                and continues looping the whole song.
+      //   Chain view → play from cursor slot. With loop ON, wraps to slot 0.
+      //   Phrase view → play this phrase from top.
+      // All tracks always play; use Solo/Mute to isolate.
       final data = _playbackWindow == 2
           ? model.buildPhraseData(model.activePhraseIdx)
           : _playbackWindow == 1
               ? model.buildChainData(model.activeChainIdx)
-              : model.isLooping
-                  ? model.buildPlaybackData(startRow: 0)  // Loop from song top
-                  : model.buildPlaybackData(startRow: model.cursorRow);  // Play from cursor
+              : model.buildPlaybackData(startRow: 0);
 
       _songRowMap    = data.songRowMap;
       _chainRowMap   = data.chainRowMap;
       _phraseStepMap = data.phraseStepMap;
-      
-      // Find the offset into the playback array that corresponds to cursorRow
-      int cursorOffset = 0;
-      if (_playbackWindow == 0 && model.isLooping) {
+
+      // Find offset where the cursor row/slot begins in the built rows.
+      int startOffset = 0;
+      if (_playbackWindow == 0) {
         for (int i = 0; i < _songRowMap.length; i++) {
-          if (_songRowMap[i] == model.cursorRow) {
-            cursorOffset = i;
-            break;
-          }
+          if (_songRowMap[i] == model.cursorRow) { startOffset = i; break; }
+        }
+      } else if (_playbackWindow == 1) {
+        for (int i = 0; i < _chainRowMap.length; i++) {
+          if (_chainRowMap[i] == model.cursorRow) { startOffset = i; break; }
         }
       }
-      
-      _currentStepIndex = cursorOffset;
-      model.playheadRow = _playbackWindow == 0 ? model.cursorRow : 0;
 
-      if (data.rows.isEmpty) {
+      // Build the rows actually sent to C++:
+      //   loop ON  → rotate: [cursor..end] + [0..cursor)  (whole sequence loops)
+      //   loop OFF → only [cursor..end]                   (plays to end then stops)
+      List<Map<String, dynamic>> playRows;
+      if (model.isLooping && _playbackWindow != 2 && startOffset > 0) {
+        playRows = [
+          ...data.rows.sublist(startOffset),
+          ...data.rows.sublist(0, startOffset),
+        ];
+        _songRowMap    = [..._songRowMap.sublist(startOffset),    ..._songRowMap.sublist(0, startOffset)];
+        _chainRowMap   = [..._chainRowMap.sublist(startOffset),   ..._chainRowMap.sublist(0, startOffset)];
+        _phraseStepMap = [..._phraseStepMap.sublist(startOffset), ..._phraseStepMap.sublist(0, startOffset)];
+      } else if (!model.isLooping && _playbackWindow != 2 && startOffset > 0) {
+        playRows       = data.rows.sublist(startOffset);
+        _songRowMap    = _songRowMap.sublist(startOffset);
+        _chainRowMap   = _chainRowMap.sublist(startOffset);
+        _phraseStepMap = _phraseStepMap.sublist(startOffset);
+      } else {
+        playRows = data.rows;
+      }
+      _currentStepIndex = 0;
+
+      model.playheadRow      = _playbackWindow == 0 ? model.cursorRow : 0;
+      model.playheadChainRow = _playbackWindow == 1 ? model.cursorRow : 0;
+
+      if (playRows.isEmpty) {
         model.stopPlayback();
         setState(() {});
         return;
       }
-      await NativeAudioEngine.enqueueAllRows(model.isLooping, data.rows);
+      await NativeAudioEngine.enqueueAllRows(model.isLooping, playRows);
       _startPollTimer();
       setState(() {});
     }
