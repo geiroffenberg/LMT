@@ -84,9 +84,6 @@ void main() async {
       s.release,
       s.loopMode,
     );
-    // Push HP/LP filter cutoffs so phrase playback applies them without
-    // needing to open the sampler window first.
-    await NativeAudioEngine.setInstrumentFilters(i, s.hpCutoff, s.lpCutoff);
   }
 
   runApp(LMTApp(initialModel: model));
