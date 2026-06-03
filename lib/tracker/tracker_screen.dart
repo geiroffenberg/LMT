@@ -48,6 +48,16 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   int _songCursorCol       = 0;
   bool _songCellWasEmpty   = true; // true when saved cell had no chain ref
 
+  // Saved chain-view cursor — persists through phrase/instrument/mixer visits
+  int _chainCursorRow      = 0;
+  int _chainCursorCol      = 0;
+
+  // Saved chain index — persists when navigating from chain to phrase and back
+  int _savedChainIdx       = 0;
+  
+  // Saved phrase index — persists when navigating from phrase to other views and back
+  int _savedPhraseIdx      = 0;
+
   @override
   void initState() {
     super.initState();
@@ -204,7 +214,18 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         setState(() {
           // Map step index → actual song row and chain slot
           if (_songRowMap.isNotEmpty) {
-            _currentStepIndex = (_currentStepIndex + advanced) % _songRowMap.length;
+            final nextIndex = _currentStepIndex + advanced;
+            final wrapped = nextIndex % _songRowMap.length;
+            
+            // If we wrapped AND loop is off, stop playback
+            if (nextIndex >= _songRowMap.length && !model.isLooping) {
+              model.stopPlayback();
+              _stepTimer?.cancel();
+              _stepTimer = null;
+              return;
+            }
+            
+            _currentStepIndex = wrapped;
             model.playheadRow      = _songRowMap[_currentStepIndex];
             model.playheadChainRow = _chainRowMap[_currentStepIndex];
             model.phraseStep       = _phraseStepMap.isNotEmpty ? _phraseStepMap[_currentStepIndex] : 0;
@@ -235,11 +256,26 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
           ? model.buildPhraseData(model.activePhraseIdx)
           : _playbackWindow == 1
               ? model.buildChainData(model.activeChainIdx)
-              : model.buildPlaybackData(startRow: model.cursorRow);
+              : model.isLooping
+                  ? model.buildPlaybackData(startRow: 0)  // Loop from song top
+                  : model.buildPlaybackData(startRow: model.cursorRow);  // Play from cursor
 
       _songRowMap    = data.songRowMap;
       _chainRowMap   = data.chainRowMap;
       _phraseStepMap = data.phraseStepMap;
+      
+      // Find the offset into the playback array that corresponds to cursorRow
+      int cursorOffset = 0;
+      if (_playbackWindow == 0 && model.isLooping) {
+        for (int i = 0; i < _songRowMap.length; i++) {
+          if (_songRowMap[i] == model.cursorRow) {
+            cursorOffset = i;
+            break;
+          }
+        }
+      }
+      
+      _currentStepIndex = cursorOffset;
       model.playheadRow = _playbackWindow == 0 ? model.cursorRow : 0;
 
       if (data.rows.isEmpty) {
@@ -259,11 +295,17 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     model.clearLineSelection();
     final fromWindow = model.currentWindow;
 
-    // ── Save song cursor whenever leaving song view ────────────────────────
+    // ── Save cursor whenever leaving song or chain view ───────────────────
     if (fromWindow == 0) {
       _songCursorRow    = model.cursorRow;
       _songCursorCol    = model.cursorCol;
       _songCellWasEmpty = model.song.chains[model.cursorRow][model.cursorCol] <= 0;
+    } else if (fromWindow == 1) {
+      _chainCursorRow   = model.cursorRow;
+      _chainCursorCol   = model.cursorCol;
+      _savedChainIdx    = model.activeChainIdx;
+    } else if (fromWindow == 2) {
+      _savedPhraseIdx   = model.activePhraseIdx;
     }
 
     // ── Forward navigation rules ─────────────────────────────────────────
@@ -274,6 +316,9 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         final chainRef = model.song.chains[model.cursorRow][model.cursorCol];
         if (chainRef <= 0) return;
         model.activeChainIdx = chainRef - 1;
+      } else if (fromWindow == 2) {
+        // From phrase: restore saved chain index
+        model.activeChainIdx = _savedChainIdx;
       } else if (fromWindow == 3 || fromWindow == 4) {
         // From instrument/mixer: use saved song cursor.
         if (_songCellWasEmpty) return;
@@ -281,7 +326,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         if (chainRef <= 0) return;
         model.activeChainIdx = chainRef - 1;
       }
-      // From Phrase or Chain itself: always allowed, activeChainIdx already set.
+      // From Chain itself: always allowed, activeChainIdx already set.
     }
     // Phrase window
     else if (windowIndex == 2) {
@@ -292,9 +337,8 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       } else if (fromWindow == 0) {
         return; // must go Song → Chain first
       } else if (fromWindow == 3 || fromWindow == 4) {
-        // From instrument/mixer: block if the saved song cell had no chain.
-        if (_songCellWasEmpty) return;
-        // Otherwise allow — activeChainIdx/activePhraseIdx from prior navigation.
+        // From instrument/mixer: restore saved phrase index
+        model.activePhraseIdx = _savedPhraseIdx;
       }
       // From Phrase itself: always allowed.
     }
@@ -327,6 +371,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         }
         if (!found) { model.cursorRow = 0; model.cursorCol = 0; }
       }
+    } else if (windowIndex == 1) {
+      // Chain window: restore cursor to the phrase row the user selected
+      model.cursorRow = _chainCursorRow;
+      model.cursorCol = _chainCursorCol;
     } else {
       model.cursorRow = 0;
       model.cursorCol = 0;
