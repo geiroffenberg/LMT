@@ -84,11 +84,20 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Save when the app is backgrounded or the process is about to be killed
+    // Stop playback when the app is backgrounded so the loop doesn't keep
+    // running in the background (and can't be stopped on return).
     if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden ||
         state == AppLifecycleState.detached) {
-      // Autosave disabled
-      // _autoSave();
+      if (model.isPlaying) {
+        model.stopPlayback();
+      }
+      _stepTimer?.cancel();
+      _stepTimer = null;
+      NativeAudioEngine.clearQueue();
+      NativeAudioEngine.stopAll();
+      if (mounted) setState(() {});
     }
     // Reinitialize the native audio engine when the app comes back to the
     // foreground — the Oboe stream may have been released while backgrounded.
