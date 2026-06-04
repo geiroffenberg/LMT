@@ -1252,6 +1252,143 @@ class TrackerModel {
   }
 
   // -----------------------------------------------------------------------
+  // Build C++ rows for ONE song row (Chain-view playback).
+  // All 8 tracks play together. Shorter chains loop by modulo; the longest
+  // chain decides the total number of slots. Shorter phrases inside a slot
+  // also loop by modulo so the longest phrase drives that slot's step count.
+  // -----------------------------------------------------------------------
+  ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap})
+      buildSongRowData(int songRow) {
+    final rows          = <Map<String, dynamic>>[];
+    final songRowMap    = <int>[];
+    final chainRowMap   = <int>[];
+    final phraseStepMap = <int>[];
+
+    if (isSongRowEmpty(songRow)) {
+      return (rows: rows, songRowMap: songRowMap, chainRowMap: chainRowMap, phraseStepMap: phraseStepMap);
+    }
+
+    int currentBpm = song.bpm;
+    int currentLpb = song.lpb;
+    final rng = Random();
+
+    final trackItems = List<List<ChainItem>>.generate(8, (t) {
+      final chainRef = song.chains[songRow][t];
+      if (chainRef == 0) return [];
+      return chains[chainRef - 1].items.where((ci) => ci.phrase != 0).toList();
+    });
+
+    final maxSlots = trackItems.fold(0, (m, l) => l.length > m ? l.length : m);
+
+    for (int slot = 0; slot < maxSlots; slot++) {
+      // Chain-level FX: BPM and LPB
+      for (int t = 0; t < 8; t++) {
+        if (trackItems[t].isEmpty) continue;
+        final ci = trackItems[t][slot % trackItems[t].length];
+        for (final fx in ci.fx) {
+          if (fx.name == 'BPM') currentBpm = fxValToBpm(fx.value);
+          else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
+        }
+      }
+
+      int maxSteps = 0;
+      for (int t = 0; t < 8; t++) {
+        if (trackItems[t].isEmpty) continue;
+        final ci = trackItems[t][slot % trackItems[t].length];
+        final len = _getPhraseLen(phrases[ci.phrase - 1]);
+        if (len > maxSteps) maxSteps = len;
+      }
+      if (maxSteps == 0) continue;
+
+      for (int step = 0; step < maxSteps; step++) {
+        // Step-level BPM/LPB
+        for (int t = 0; t < 8; t++) {
+          if (trackItems[t].isEmpty) continue;
+          final ci = trackItems[t][slot % trackItems[t].length];
+          final ph = phrases[ci.phrase - 1];
+          final phraseLen = _getPhraseLen(ph);
+          if (phraseLen == 0) continue;
+          final ps = ph.steps[step % phraseLen];
+          for (final fx in ps.fx) {
+            if (fx.name == 'BPM') currentBpm = fxValToBpm(fx.value);
+            else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
+          }
+        }
+
+        final int lineSamples = (48000.0 * 60.0 / (currentBpm * currentLpb)).round();
+        final noteData = <int>[];
+
+        for (int t = 0; t < 8; t++) {
+          if (trackItems[t].isEmpty || !isTrackAudible(t)) {
+            noteData.addAll([-1, -1, -1, 0, 0, 0, 0, 0, 0]);
+            continue;
+          }
+          final ci = trackItems[t][slot % trackItems[t].length];
+          final ph = phrases[ci.phrase - 1];
+          final phraseLen = _getPhraseLen(ph);
+          if (phraseLen == 0) { noteData.addAll([-1, -1, -1, 0, 0, 0, 0, 0, 0]); continue; }
+          final ps = ph.steps[step % phraseLen];
+
+          int instrIdx = ps.instrument > 0 ? ps.instrument - 1 : -1;
+          int midiNote = ps.note;
+
+          if (instrIdx >= 0 && midiNote >= 0 && ci.transpose != 0) {
+            final int semitones = ci.transpose <= 12 ? ci.transpose : ci.transpose - 100;
+            midiNote = (midiNote + semitones).clamp(0, 120);
+          }
+
+          if (instrIdx >= 0) {
+            for (final fx in ps.fx) {
+              if (fx.name == 'CHA') {
+                if (rng.nextInt(100) >= fx.value) { instrIdx = -1; midiNote = -1; }
+                break;
+              }
+            }
+          }
+
+          int? chainVol, chainPan, chainSnr, chainSnd, chainSnc;
+          for (final cfx in ci.fx) {
+            if (cfx.name == 'VOL') chainVol = cfx.value;
+            else if (cfx.name == 'PAN') chainPan = cfx.value;
+            else if (cfx.name == 'SNR') chainSnr = cfx.value;
+            else if (cfx.name == 'SND') chainSnd = cfx.value;
+            else if (cfx.name == 'SNC') chainSnc = cfx.value;
+          }
+
+          final packedVol = chainVol ?? ps.volume;
+          final fxIds  = [0, 0, 0];
+          final fxVals = [0, 0, 0];
+          for (int i = 0; i < ps.fx.length && i < 3; i++) {
+            fxIds[i]  = _fxIdForC(ps.fx[i].name);
+            fxVals[i] = ps.fx[i].value;
+          }
+          for (final entry in [
+            (kFxId['PAN'], chainPan),
+            (kFxId['SNR'], chainSnr),
+            (kFxId['SND'], chainSnd),
+            (kFxId['SNC'], chainSnc),
+          ]) {
+            final id = entry.$1; final val = entry.$2;
+            if (id == null || val == null || fxIds.contains(id)) continue;
+            final emptyIdx = fxIds.indexOf(0);
+            if (emptyIdx == -1) break;
+            fxIds[emptyIdx] = id; fxVals[emptyIdx] = val;
+          }
+          noteData.addAll([instrIdx, midiNote, packedVol]);
+          for (int i = 0; i < 3; i++) { noteData.add(fxIds[i]); noteData.add(fxVals[i]); }
+        }
+
+        rows.add({'lineSamples': lineSamples, 'noteData': noteData});
+        songRowMap.add(songRow);
+        chainRowMap.add(slot);
+        phraseStepMap.add(step);
+      }
+    }
+
+    return (rows: rows, songRowMap: songRowMap, chainRowMap: chainRowMap, phraseStepMap: phraseStepMap);
+  }
+
+  // -----------------------------------------------------------------------
   // Build all C++ rows for Song playback starting from [startRow].
   // Returns rows + a parallel songRowMap (which song row each C++ row belongs to)
   // so the Dart poll timer can update playheadRow correctly.

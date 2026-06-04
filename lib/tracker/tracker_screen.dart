@@ -206,7 +206,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     final data = _playbackWindow == 2
         ? model.buildPhraseData(model.activePhraseIdx)
         : _playbackWindow == 1
-            ? model.buildChainData(model.activeChainIdx)
+            ? model.buildSongRowData(model.playheadRow)
             : model.buildPlaybackData(startRow: model.playheadRow);
     if (data.rows.isEmpty) return;
     await NativeAudioEngine.clearQueue();
@@ -264,76 +264,35 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       _playbackWindow   = model.currentWindow;
 
       // Playback rules — all 8 tracks always play; Solo/Mute to isolate.
-      //   Song view  → play whole song from cursor row. Loop wraps to row 0.
-      //   Chain view → find the song row containing this chain, play the full
-      //                arrangement for that row (all tracks). Start at cursor slot.
-      //   Phrase view → find the song row + chain slot containing this phrase,
-      //                 play the full arrangement (all tracks).
+      //   Song view  → full song from cursor row; loop wraps to cursor row.
+      //   Chain view → one song row, all 8 tracks, all slots; always loops from slot 0.
+      //   Phrase view → this phrase solo, loop from step 0.
       late final ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap}) data;
       int startOffset = 0;
 
       if (_playbackWindow == 2) {
-        // Phrase view: locate song row + chain slot that references this phrase
-        final phraseRef = model.activePhraseIdx + 1;
-        int foundRow = -1, foundSlot = -1;
-        outer:
-        for (int r = 0; r < model.song.chains.length; r++) {
-          if (model.isSongRowEmpty(r)) break;
-          for (int t = 0; t < 8; t++) {
-            final chainRef = model.song.chains[r][t];
-            if (chainRef <= 0) continue;
-            final items = model.chains[chainRef - 1].items;
-            for (int s = 0; s < items.length; s++) {
-              if (items[s].phrase == phraseRef) {
-                foundRow = r; foundSlot = s;
-                break outer;
-              }
-            }
-          }
-        }
-        if (foundRow >= 0) {
-          data = model.buildPlaybackData(startRow: foundRow);
-          // Find offset for chain slot foundSlot, step 0
-          for (int i = 0; i < data.chainRowMap.length; i++) {
-            if (data.songRowMap[i] == foundRow && data.chainRowMap[i] == foundSlot && data.phraseStepMap[i] == 0) {
-              startOffset = i; break;
-            }
-          }
-        } else {
-          // Fallback: phrase isn't placed in song; play it solo on track 0
-          final rows = model.buildPhraseRows(model.activePhraseIdx);
-          data = (rows: rows,
-                  songRowMap: List.filled(rows.length, 0),
-                  chainRowMap: List.filled(rows.length, 0),
-                  phraseStepMap: List.generate(rows.length, (i) => i));
-        }
+        // Phrase view: play this phrase solo, looping from step 0.
+        data = model.buildPhraseData(model.activePhraseIdx);
       } else if (_playbackWindow == 1) {
-        // Chain view: locate song row that references this chain
+        // Chain view: find the song row containing this chain, then build just
+        // that one row (all 8 tracks, all chain slots, shorter chains loop).
         final chainRef = model.activeChainIdx + 1;
         int foundRow = -1;
-        outer:
-        for (int r = 0; r < model.song.chains.length; r++) {
+        for (int r = 0; r < 99; r++) {
           if (model.isSongRowEmpty(r)) break;
           for (int t = 0; t < 8; t++) {
-            if (model.song.chains[r][t] == chainRef) { foundRow = r; break outer; }
+            if (model.song.chains[r][t] == chainRef) { foundRow = r; break; }
           }
+          if (foundRow >= 0) break;
         }
-        if (foundRow >= 0) {
-          data = model.buildPlaybackData(startRow: foundRow);
-          // Start at cursor slot within this song row
-          for (int i = 0; i < data.chainRowMap.length; i++) {
-            if (data.songRowMap[i] == foundRow &&
-                data.chainRowMap[i] == model.cursorRow &&
-                data.phraseStepMap[i] == 0) {
-              startOffset = i; break;
-            }
-          }
-        } else {
-          // Fallback: chain isn't placed in song; play it solo on track 0
-          data = model.buildChainData(model.activeChainIdx);
+        if (foundRow < 0) {
+          model.stopPlayback();
+          setState(() {});
+          return;
         }
+        data = model.buildSongRowData(foundRow);
       } else {
-        // Song view
+        // Song view: full song, start at cursor row.
         data = model.buildPlaybackData(startRow: 0);
         for (int i = 0; i < data.songRowMap.length; i++) {
           if (data.songRowMap[i] == model.cursorRow) { startOffset = i; break; }
@@ -365,7 +324,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       _currentStepIndex = 0;
 
       model.playheadRow      = _playbackWindow == 0 ? model.cursorRow : 0;
-      model.playheadChainRow = _playbackWindow == 1 ? model.cursorRow : 0;
+      model.playheadChainRow = 0;
 
       if (playRows.isEmpty) {
         model.stopPlayback();
@@ -461,9 +420,15 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         if (!found) { model.cursorRow = 0; model.cursorCol = 0; }
       }
     } else if (windowIndex == 1) {
-      // Chain window: restore cursor to the phrase row the user selected
-      model.cursorRow = _chainCursorRow;
-      model.cursorCol = _chainCursorCol;
+      // Chain window: start at row 0 when arriving fresh from song view;
+      // restore saved cursor when returning from phrase/instrument/mixer.
+      if (fromWindow == 0) {
+        model.cursorRow = 0;
+        model.cursorCol = 0;
+      } else {
+        model.cursorRow = _chainCursorRow;
+        model.cursorCol = _chainCursorCol;
+      }
     } else {
       model.cursorRow = 0;
       model.cursorCol = 0;
