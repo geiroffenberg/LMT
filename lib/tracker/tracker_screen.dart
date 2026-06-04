@@ -206,7 +206,9 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     final data = _playbackWindow == 2
         ? model.buildPhraseData(model.activePhraseIdx)
         : _playbackWindow == 1
-            ? model.buildSongRowData(model.playheadRow)
+            ? model.buildSongRowData(model.playheadRow,
+                limitSlots: model.chains[model.activeChainIdx]
+                    .items.where((ci) => ci.phrase != 0).length)
             : model.buildPlaybackData(startRow: model.playheadRow);
     if (data.rows.isEmpty) return;
     await NativeAudioEngine.clearQueue();
@@ -290,7 +292,11 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
           setState(() {});
           return;
         }
-        data = model.buildSongRowData(foundRow);
+        // Limit slots to the active chain's own length so the playhead
+        // doesn't advance into slots that are empty in the viewed chain.
+        final activeChainSlots = model.chains[model.activeChainIdx]
+            .items.where((ci) => ci.phrase != 0).length;
+        data = model.buildSongRowData(foundRow, limitSlots: activeChainSlots);
       } else {
         // Song view: full song, start at cursor row.
         data = model.buildPlaybackData(startRow: 0);

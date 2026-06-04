@@ -1258,7 +1258,7 @@ class TrackerModel {
   // also loop by modulo so the longest phrase drives that slot's step count.
   // -----------------------------------------------------------------------
   ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap})
-      buildSongRowData(int songRow) {
+      buildSongRowData(int songRow, {int? limitSlots}) {
     final rows          = <Map<String, dynamic>>[];
     final songRowMap    = <int>[];
     final chainRowMap   = <int>[];
@@ -1278,7 +1278,10 @@ class TrackerModel {
       return chains[chainRef - 1].items.where((ci) => ci.phrase != 0).toList();
     });
 
-    final maxSlots = trackItems.fold(0, (m, l) => l.length > m ? l.length : m);
+    // Use the longest chain unless a limit is given (e.g. chain view caps at
+    // the viewed chain's own length so the playhead doesn't overrun it).
+    final rawMaxSlots = trackItems.fold(0, (m, l) => l.length > m ? l.length : m);
+    final maxSlots = limitSlots != null ? rawMaxSlots.clamp(0, limitSlots) : rawMaxSlots;
 
     for (int slot = 0; slot < maxSlots; slot++) {
       // Chain-level FX: BPM and LPB
