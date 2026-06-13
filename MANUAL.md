@@ -73,8 +73,13 @@ Playback reads rows top-to-bottom; all 8 tracks play simultaneously.
 
 ### Song Settings
 
-Open ☰ → **SONG SETTINGS** to change global **BPM** (60–240) and
-**LPB** (lines per beat, 1–16).
+Open ☰ → **SONG SETTINGS** to change:
+
+| Setting | Range | Description |
+|---|---|---|
+| **BPM** | 60–300 | Tempo |
+| **LPB** | 1–12 | Lines per beat |
+| **SWING %** | 50–75 | Swing feel: 50 = straight, 66 = triplet, 75 = heavy. Even-numbered steps play longer, odd steps shorter. |
 
 ---
 
@@ -147,8 +152,17 @@ Each instrument slot (01–16) is an independent sampler voice.
 
 ### Loading a sample
 
-Tap **LOAD** to open the file browser. Supported format: **mono 16-bit WAV**.
-The sample is copied into the project folder on save.
+Each instrument row has three buttons:
+
+| Button | Action |
+|---|---|
+| **LD** | Open the file browser to load a WAV |
+| **ED** | Open the sampler editor (crop, chop, normalize, waveform view) |
+| **RC** | Record from the microphone directly into this slot |
+
+Tap **RC** to start recording. A red blinking dot and a timer appear. Tap **STOP** to finish — the recording is saved as a WAV and loaded into the slot automatically. Tap **CANCEL** to discard. Maximum recording length: 60 seconds.
+
+Supported WAV format on load: any sample rate; mono or stereo; 16-bit, 24-bit, or 32-bit PCM. Stereo files are mixed down to mono on load.
 
 ### Parameters
 
@@ -172,11 +186,11 @@ The sample is copied into the project folder on save.
 | **DLY** | Delay send |
 | **CHO** | Chorus send |
 
-### Chop / Crop
+### Chop / Crop / Normalize
 
-- **CHOP** — divide the sample into equal slices (for drum kits / one-shots).
-  Use `SLC` FX command to select a slice per step.
-- **CROP** — trim the sample to the current START/END range and save in-place.
+- **CROP** — trim the sample to the current START/END range and save as a new file.
+- **CHOP** — divide the sample into equal slices (for drum kits / one-shots). Use the `SLC` FX command to select a slice per step.
+- **NORM** — normalize the sample so its loudest peak reaches near full scale (0.99). Saves as a new file.
 
 ### Preview
 
@@ -203,13 +217,13 @@ Drag left/right on a cell to change its value.
 
 Tap **FX** inside the mixer to open the master effects chain:
 
-| Effect | Parameters |
-|---|---|
-| **EQ** | Three bands: low, mid, high (dB gain) |
-| **HP** | Master high-pass frequency |
-| **Reverb** | Mix, size, width |
-| **Delay** | Time, feedback |
-| **Chorus** | Rate, depth |
+| Effect | Parameters | Notes |
+|---|---|---|
+| **REVERB** | SIZE, DAMP, WID | Freeverb stereo reverb |
+| **DELAY** | TIME (00–99), FDBK | TIME is tempo-synced: 50 = half a line at current BPM/LPB, 25 = quarter line, 99 ≈ one full line |
+| **CHORUS** | RATE, DPTH | LFO-modulated delay |
+
+Drag left/right on any parameter row to adjust. All master FX settings are saved with the project.
 
 ### Solo Tracks
 
@@ -254,7 +268,10 @@ to hear a single track in isolation if needed.
 | **SAVE AS…** | Save under a new name |
 | **NEW SONG** | Start a blank project |
 | **LOAD SONG** | Open an existing project |
-| **SONG SETTINGS** | Change BPM and LPB |
+| **EXPORT WAV** | Render the song to a stereo WAV file (saved to Downloads) |
+| **EXPORT ZIP** | Bundle the project folder into a ZIP for sharing or backup |
+| **IMPORT ZIP** | Load a project from a ZIP file |
+| **SONG SETTINGS** | Change BPM, LPB, and Swing % |
 | **MANUAL** | Show this manual |
 
 Projects are stored in the app's documents directory, one folder per project.

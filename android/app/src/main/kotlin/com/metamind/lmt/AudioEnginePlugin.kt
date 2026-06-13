@@ -143,6 +143,11 @@ class AudioEnginePlugin(private val context: Context) {
                     nativeSetDelayTime(nativeHandle, norm)
                     result.success(true)
                 }
+                "setDelayTimeMs" -> {
+                    val ms = call.argument<Double>("ms")?.toFloat() ?: 0f
+                    nativeSetDelayTimeMs(nativeHandle, ms)
+                    result.success(true)
+                }
                 "setDelayFeedback" -> {
                     val norm = call.argument<Double>("norm")?.toFloat() ?: 0f
                     nativeSetDelayFeedback(nativeHandle, norm)
@@ -260,6 +265,26 @@ class AudioEnginePlugin(private val context: Context) {
                         "sampleRate" to outRate[0]
                     ))
                 }
+                "openRecordingStream" -> {
+                    nativeOpenRecordingStream(nativeHandle)
+                    result.success(true)
+                }
+                "closeRecordingStream" -> {
+                    nativeCloseRecordingStream(nativeHandle)
+                    result.success(true)
+                }
+                "startRecording" -> {
+                    nativeStartRecording(nativeHandle)
+                    result.success(true)
+                }
+                "stopRecording" -> {
+                    val outRate = IntArray(1) { 48000 }
+                    val samples = nativeStopRecording(nativeHandle, outRate)
+                    result.success(mapOf(
+                        "samples" to samples.map { it.toDouble() },
+                        "sampleRate" to outRate[0]
+                    ))
+                }
                 "saveToDownloads" -> {
                     val sourcePath = call.argument<String>("sourcePath") ?: ""
                     val fileName   = call.argument<String>("fileName")   ?: "export.wav"
@@ -301,6 +326,7 @@ class AudioEnginePlugin(private val context: Context) {
     private external fun nativeSetReverbDamping(handle: Long, norm: Float)
     private external fun nativeSetReverbWidth(handle: Long, norm: Float)
     private external fun nativeSetDelayTime(handle: Long, norm: Float)
+    private external fun nativeSetDelayTimeMs(handle: Long, ms: Float)
     private external fun nativeSetDelayFeedback(handle: Long, norm: Float)
     private external fun nativeSetChorusRate(handle: Long, norm: Float)
     private external fun nativeSetChorusDepth(handle: Long, norm: Float)
@@ -321,6 +347,10 @@ class AudioEnginePlugin(private val context: Context) {
     private external fun nativeGetMasterPeak(handle: Long): Float
     private external fun nativeStartExportTap(handle: Long)
     private external fun nativeStopExportTap(handle: Long, outSampleRate: IntArray): FloatArray
+    private external fun nativeOpenRecordingStream(handle: Long)
+    private external fun nativeCloseRecordingStream(handle: Long)
+    private external fun nativeStartRecording(handle: Long)
+    private external fun nativeStopRecording(handle: Long, outSampleRate: IntArray): FloatArray
 
     // -------------------------------------------------------------------------
     // Save a file from app-private storage into the public Downloads folder

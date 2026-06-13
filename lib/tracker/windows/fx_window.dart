@@ -91,8 +91,6 @@ class _FxWindowState extends State<FxWindow> {
 
   String _pct(double v) => '${(v * 100).round()}%';
   String _hz(double v)  => v >= 1 ? '${v.toStringAsFixed(1)}Hz' : '${(v * 1000).round()}mHz';
-  String _lines(double v) => '${v.round()}ln';
-  String _fmt1(double v) => v.toStringAsFixed(2);
 
   @override
   Widget build(BuildContext context) {
@@ -112,11 +110,15 @@ class _FxWindowState extends State<FxWindow> {
 
           // ── Delay ────────────────────────────────────────────────────────
           _sectionHeader('DELAY'),
-          _paramRow('L TM', fx.delayTimeL,    1, 16, _lines(fx.delayTimeL),
-              (v) { fx.delayTimeL = v; NativeAudioEngine.setDelayTime((v - 1) / 15); }),
-          _paramRow('R TM', fx.delayTimeR,    1, 16, _lines(fx.delayTimeR),
-              (v) { fx.delayTimeR = v; NativeAudioEngine.setDelayTime((v - 1) / 15); }),
-          _paramRow('FDBK', fx.delayFeedback,  0,    1, _pct(fx.delayFeedback),
+          _paramRow('TIME', fx.delayLines.toDouble(), 0, 99,
+              fx.delayLines.toString().padLeft(2, '0'),
+              (v) {
+                fx.delayLines = v.round().clamp(0, 99);
+                final ms = (fx.delayLines / 100.0) * 60000.0 /
+                    (widget.model.song.bpm * widget.model.song.lpb);
+                NativeAudioEngine.setDelayTimeMs(ms);
+              }),
+          _paramRow('FDBK', fx.delayFeedback,  0, 1, _pct(fx.delayFeedback),
               (v) { fx.delayFeedback = v; NativeAudioEngine.setDelayFeedback(v); }),
 
           // ── Chorus ───────────────────────────────────────────────────────

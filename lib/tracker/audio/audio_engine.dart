@@ -224,6 +224,7 @@ class NativeAudioEngine {
   static Future<void> setReverbDamping(double norm) => _invoke('setReverbDamping', {'norm': norm});
   static Future<void> setReverbWidth(double norm)   => _invoke('setReverbWidth',   {'norm': norm});
   static Future<void> setDelayTime(double norm)     => _invoke('setDelayTime',     {'norm': norm});
+  static Future<void> setDelayTimeMs(double ms)     => _invoke('setDelayTimeMs',   {'ms': ms});
   static Future<void> setDelayFeedback(double norm) => _invoke('setDelayFeedback', {'norm': norm});
   static Future<void> setChorusRate(double norm)    => _invoke('setChorusRate',    {'norm': norm});
   static Future<void> setChorusDepth(double norm)   => _invoke('setChorusDepth',   {'norm': norm});
@@ -291,6 +292,52 @@ class NativeAudioEngine {
       return (samples: samples, sampleRate: sampleRate);
     } catch (e) {
       debugPrint('Error stopExportTap: $e');
+      return (samples: const <double>[], sampleRate: 48000);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Mic recording
+  // ---------------------------------------------------------------------------
+
+  /// Open + start the mic input stream so it stays warm before recording.
+  static Future<void> openRecordingStream() async {
+    try {
+      await platform.invokeMethod<void>('openRecordingStream');
+    } catch (e) {
+      debugPrint('Error openRecordingStream: $e');
+    }
+  }
+
+  /// Stop + close the mic input stream.
+  static Future<void> closeRecordingStream() async {
+    try {
+      await platform.invokeMethod<void>('closeRecordingStream');
+    } catch (e) {
+      debugPrint('Error closeRecordingStream: $e');
+    }
+  }
+
+  /// Begin accumulating mic input into the recording buffer.
+  /// The stream must already be open (via [openRecordingStream]).
+  static Future<void> startRecording() async {
+    try {
+      await platform.invokeMethod<void>('startRecording');
+    } catch (e) {
+      debugPrint('Error startRecording: $e');
+    }
+  }
+
+  /// Stop recording and return the captured mono samples + sample rate.
+  static Future<({List<double> samples, int sampleRate})> stopRecording() async {
+    try {
+      final result = await platform.invokeMethod<Map>('stopRecording');
+      final rawSamples = result?['samples'] as List? ?? const [];
+      final sampleRate = (result?['sampleRate'] as int?) ?? 48000;
+      final samples = rawSamples.map((e) => (e as num).toDouble()).toList();
+      return (samples: samples, sampleRate: sampleRate);
+    } catch (e) {
+      debugPrint('Error stopRecording: $e');
       return (samples: const <double>[], sampleRate: 48000);
     }
   }

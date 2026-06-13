@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../audio/audio_engine.dart';
 import '../tracker_model.dart';
@@ -14,10 +15,12 @@ const _rowLabels = ['LVL', 'RVB', 'DLY', 'CHO'];
 class MixerWindow extends StatefulWidget {
   final TrackerModel model;
   final VoidCallback onStateChange;
+  final ValueListenable<double>? masterPeak;
 
   const MixerWindow({
     required this.model,
     required this.onStateChange,
+    this.masterPeak,
     super.key,
   });
 
@@ -220,8 +223,10 @@ class _MixerWindowState extends State<MixerWindow> {
                 (v) { fx.limiterThreshold = v; NativeAudioEngine.setLimiterThreshold(v); }, fontSize, ts),
 
             // ── VOL row with horizontal master meter overlay ───────────────
-            Builder(builder: (context) {
-              final masterPeak = model.masterPeak;
+            ValueListenableBuilder<double>(
+              valueListenable: widget.masterPeak ??
+                  AlwaysStoppedAnimation<double>(model.masterPeak),
+              builder: (context, masterPeak, _) {
               final double dB = masterPeak > 1e-6
                   ? 20.0 * math.log(masterPeak) / math.ln10
                   : -60.0;

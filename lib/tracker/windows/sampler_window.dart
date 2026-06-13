@@ -39,6 +39,7 @@ class _SamplerWindowState extends State<SamplerWindow> {
   bool isPreviewing = false;
   bool _isCropping = false;
   bool _isChopping = false;
+  bool _isNormalizing = false;
   Timer? _previewTimer;
 
   @override
@@ -480,6 +481,148 @@ class _SamplerWindowState extends State<SamplerWindow> {
     }
   }
 
+  /// Normalize the whole sample so its loudest peak reaches near full scale.
+  Future<void> _normalizeSample() async {
+    if (_isNormalizing || !sampler.hasValidSample) return;
+    final srcPath = sampler.samplePath!;
+
+    setState(() => _isNormalizing = true);
+    try {
+      // ── Read source WAV ──────────────────────────────────────────────────
+      final srcFile = File(srcPath);
+      if (!srcFile.existsSync()) return;
+      final bytes = await srcFile.readAsBytes();
+      if (bytes.length < 44) return;
+
+      bool matchAscii(int off, String s) {
+        if (off + s.length > bytes.length) return false;
+        for (int i = 0; i < s.length; i++) {
+          if (bytes[off + i] != s.codeUnitAt(i)) return false;
+        }
+        return true;
+      }
+
+      if (!matchAscii(0, 'RIFF') || !matchAscii(8, 'WAVE')) return;
+
+      final bd = ByteData.sublistView(bytes);
+      int readLe16(int o) => bd.getUint16(o, Endian.little);
+      int readLe32(int o) => bd.getUint32(o, Endian.little);
+
+      int audioFormat = 0, channels = 0, sampleRate = 0, bitsPerSample = 0;
+      int dataOffset = -1, dataSize = 0;
+      int pos = 12;
+      while (pos + 8 <= bytes.length) {
+        final chunkSize = readLe32(pos + 4);
+        final body = pos + 8;
+        if (body + chunkSize > bytes.length) break;
+        if (matchAscii(pos, 'fmt ') && chunkSize >= 16) {
+          audioFormat = readLe16(body + 0);
+          channels    = readLe16(body + 2);
+          sampleRate  = readLe32(body + 4);
+          bitsPerSample = readLe16(body + 14);
+        } else if (matchAscii(pos, 'data')) {
+          dataOffset = body;
+          dataSize   = chunkSize;
+        }
+        pos = body + chunkSize + (chunkSize.isOdd ? 1 : 0);
+      }
+
+      if (dataOffset < 0 || channels <= 0 || bitsPerSample <= 0 ||
+          !(audioFormat == 1 || audioFormat == 3)) {
+        return;
+      }
+
+      final bytesPerSample = bitsPerSample ~/ 8;
+      final frameSize   = bytesPerSample * channels;
+      final totalFrames = dataSize ~/ frameSize;
+      if (totalFrames <= 0) return;
+
+      // ── Decode all frames → mono float, tracking the peak ─────────────────
+      final mono = List<double>.filled(totalFrames, 0.0);
+      double peak = 0.0;
+      for (int f = 0; f < totalFrames; f++) {
+        final frameOff = dataOffset + f * frameSize;
+        double acc = 0.0;
+        for (int ch = 0; ch < channels; ch++) {
+          final off = frameOff + ch * bytesPerSample;
+          double s = 0.0;
+          if (audioFormat == 1 && bitsPerSample == 8) {
+            s = (bytes[off] - 128) / 128.0;
+          } else if (audioFormat == 1 && bitsPerSample == 16) {
+            s = bd.getInt16(off, Endian.little) / 32768.0;
+          } else if (audioFormat == 1 && bitsPerSample == 24) {
+            int raw = bytes[off] | (bytes[off + 1] << 8) | (bytes[off + 2] << 16);
+            if (raw & 0x800000 != 0) raw |= ~0xFFFFFF;
+            s = raw / 8388608.0;
+          } else if (audioFormat == 3 && bitsPerSample == 32) {
+            s = bd.getFloat32(off, Endian.little);
+          }
+          acc += s;
+        }
+        final m = acc / channels;
+        mono[f] = m;
+        final a = m.abs();
+        if (a > peak) peak = a;
+      }
+
+      // Silence or already at full scale → nothing useful to do.
+      if (peak <= 1e-6) return;
+      const target = 0.99; // small headroom below 0 dBFS
+      final gain = target / peak;
+
+      // ── Write normalized mono 16-bit PCM WAV ──────────────────────────────
+      final dataBytes = totalFrames * 2;
+      final wavOut = ByteData(44 + dataBytes);
+      void fourCC(int off, String s) {
+        for (int i = 0; i < 4; i++) {
+          wavOut.setUint8(off + i, s.codeUnitAt(i));
+        }
+      }
+      fourCC(0, 'RIFF');
+      wavOut.setUint32( 4, 36 + dataBytes, Endian.little);
+      fourCC(8, 'WAVE'); fourCC(12, 'fmt ');
+      wavOut.setUint32(16, 16,           Endian.little); // chunk size
+      wavOut.setUint16(20,  1,           Endian.little); // PCM
+      wavOut.setUint16(22,  1,           Endian.little); // mono
+      wavOut.setUint32(24, sampleRate,   Endian.little);
+      wavOut.setUint32(28, sampleRate * 2, Endian.little);
+      wavOut.setUint16(32,  2,           Endian.little); // block align
+      wavOut.setUint16(34, 16,           Endian.little); // bits
+      fourCC(36, 'data');
+      wavOut.setUint32(40, dataBytes, Endian.little);
+      for (int f = 0; f < totalFrames; f++) {
+        final v = (mono[f] * gain * 32767.0).round().clamp(-32768, 32767);
+        wavOut.setInt16(44 + f * 2, v, Endian.little);
+      }
+
+      // ── Choose output filename: <base>_norm_N.wav (in app docs dir) ───────
+      final srcName = sampler.sampleName ?? srcPath.split(Platform.pathSeparator).last;
+      final dot  = srcName.lastIndexOf('.');
+      final base = dot > 0 ? srcName.substring(0, dot) : srcName;
+      final docsDir = await getApplicationDocumentsDirectory();
+      final dir = '${docsDir.path}/samples';
+      await Directory(dir).create(recursive: true);
+      int n = 1;
+      String outName;
+      do {
+        outName = '${base}_norm_$n.wav';
+        n++;
+      } while (File('$dir/$outName').existsSync());
+      final outPath = '$dir/$outName';
+      await File(outPath).writeAsBytes(wavOut.buffer.asUint8List(), flush: true);
+
+      // ── Update model + reload audio engine (keep start/end region) ────────
+      model.loadSampleForInstrument(instrumentIdx, outPath);
+      await NativeAudioEngine.loadSample(instrumentIdx, outPath);
+
+      if (!mounted) return;
+      setState(() {});
+      await _loadWaveformPeaks();
+    } finally {
+      if (mounted) setState(() => _isNormalizing = false);
+    }
+  }
+
   /// Extract peak envelope from WAV file (adapted from tracker/tracker)
   Future<List<double>?> _readWavPeaks(String path, int bins) async {
     try {
@@ -764,12 +907,33 @@ class _SamplerWindowState extends State<SamplerWindow> {
                               behavior: HitTestBehavior.opaque,
                               onTap: _isChopping ? null : _chopSample,
                               child: Container(
+                                decoration: BoxDecoration(
+                                  border: Border(
+                                    right: BorderSide(color: Colors.white, width: 1),
+                                  ),
+                                ),
                                 alignment: Alignment.center,
                                 child: Text(
                                   _isChopping ? 'CHOP...' : 'CHOP',
                                   style: trackerStyle(
                                     size: fontSize - 4,
                                     color: _isChopping ? Colors.grey : kGreen,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: _isNormalizing ? null : _normalizeSample,
+                              child: Container(
+                                alignment: Alignment.center,
+                                child: Text(
+                                  _isNormalizing ? 'NORM...' : 'NORM',
+                                  style: trackerStyle(
+                                    size: fontSize - 4,
+                                    color: _isNormalizing ? Colors.grey : kGreen,
                                   ),
                                 ),
                               ),

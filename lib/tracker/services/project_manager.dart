@@ -201,6 +201,7 @@ class ProjectManager {
       'projectName': model.currentProjectName,
       'bpm': model.song.bpm,
       'lpb': model.song.lpb,
+      'swingPercent': model.song.swingPercent,
       'chains': [
         for (int i = 0; i < model.song.chains.length; i++)
           List<int>.from(model.song.chains[i])
@@ -257,6 +258,26 @@ class ProjectManager {
       ],
       'mutedTracks':  model.mutedTracks.toList(),
       'soloedTracks': model.soloedTracks.toList(),
+      'masterFx': {
+        'reverbSize':        model.masterFx.reverbSize,
+        'reverbDamp':        model.masterFx.reverbDamp,
+        'reverbWidth':       model.masterFx.reverbWidth,
+        'delayLines':        model.masterFx.delayLines,
+        'delayFeedback':     model.masterFx.delayFeedback,
+        'chorusRate':        model.masterFx.chorusRate,
+        'chorusDepth':       model.masterFx.chorusDepth,
+        'eqBand1':           model.masterFx.eqBand1,
+        'eqBand2':           model.masterFx.eqBand2,
+        'eqBand3':           model.masterFx.eqBand3,
+        'eqBand4':           model.masterFx.eqBand4,
+        'eqBand5':           model.masterFx.eqBand5,
+        'hpFreq':            model.masterFx.hpFreq,
+        'hpRes':             model.masterFx.hpRes,
+        'lpFreq':            model.masterFx.lpFreq,
+        'lpRes':             model.masterFx.lpRes,
+        'limiterThreshold':  model.masterFx.limiterThreshold,
+        'masterVolume':      model.masterFx.masterVolume,
+      },
     };
   }
 
@@ -268,9 +289,35 @@ class ProjectManager {
         ? path_lib.join(projectDir.path, samplesFolder)
         : '';
 
-    // Load BPM / LPB
+    // Load BPM / LPB / Swing
     model.song.bpm = json['bpm'] as int? ?? 120;
     model.song.lpb = (json['lpb'] as int? ?? 4).clamp(1, 12);
+    model.song.swingPercent = (json['swingPercent'] as int? ?? 50).clamp(50, 75);
+
+    // Load master FX settings (gracefully defaults if absent — old projects)
+    if (json['masterFx'] is Map) {
+      final fx = json['masterFx'] as Map;
+      double d(String k, double def) => (fx[k] as num?)?.toDouble() ?? def;
+      int    i2(String k, int    def) => (fx[k] as int?)  ?? def;
+      model.masterFx.reverbSize       = d('reverbSize',       0.5).clamp(0.0, 1.0);
+      model.masterFx.reverbDamp       = d('reverbDamp',       0.5).clamp(0.0, 1.0);
+      model.masterFx.reverbWidth      = d('reverbWidth',      1.0).clamp(0.0, 1.0);
+      model.masterFx.delayLines       = i2('delayLines',      50).clamp(0, 99);
+      model.masterFx.delayFeedback    = d('delayFeedback',    0.4).clamp(0.0, 1.0);
+      model.masterFx.chorusRate       = d('chorusRate',       1.0).clamp(0.1, 5.0);
+      model.masterFx.chorusDepth      = d('chorusDepth',      0.5).clamp(0.0, 1.0);
+      model.masterFx.eqBand1         = d('eqBand1',          0.0).clamp(-12.0, 12.0);
+      model.masterFx.eqBand2         = d('eqBand2',          0.0).clamp(-12.0, 12.0);
+      model.masterFx.eqBand3         = d('eqBand3',          0.0).clamp(-12.0, 12.0);
+      model.masterFx.eqBand4         = d('eqBand4',          0.0).clamp(-12.0, 12.0);
+      model.masterFx.eqBand5         = d('eqBand5',          0.0).clamp(-12.0, 12.0);
+      model.masterFx.hpFreq           = d('hpFreq',           20.0).clamp(20.0, 1000.0);
+      model.masterFx.hpRes            = d('hpRes',            0.5).clamp(0.0, 1.0);
+      model.masterFx.lpFreq           = d('lpFreq',       20000.0).clamp(1000.0, 20000.0);
+      model.masterFx.lpRes            = d('lpRes',            0.5).clamp(0.0, 1.0);
+      model.masterFx.limiterThreshold = d('limiterThreshold', 0.0).clamp(0.0, 12.0);
+      model.masterFx.masterVolume     = d('masterVolume',     0.8).clamp(0.0, 1.0);
+    }
 
     // Load chains (song grid — which chain each song row/track references)
     if (json['chains'] is List) {

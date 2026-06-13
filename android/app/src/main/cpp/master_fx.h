@@ -68,6 +68,11 @@ public:
         mDelayTimeMs = std::exp(logMin + norm * (logMax - logMin));
     }
 
+    /// Set delay time directly in milliseconds (used by the tempo-synced UI).
+    void setDelayTimeMs(float ms) {
+        mDelayTimeMs = std::clamp(ms, 0.0f, 2000.0f);
+    }
+
     void setDelayFeedback(float norm) {
         norm = std::clamp(norm, 0.0f, 1.0f);
         mDelayFeedback = norm * 0.95f;  // Clamp to 0..0.95 to prevent runaway

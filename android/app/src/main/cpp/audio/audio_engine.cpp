@@ -3,6 +3,7 @@
 #include <android/log.h>
 #include <fstream>
 #include <cstring>
+#include <algorithm>
 #include <jni.h>
 
 #define LOG_TAG "LMT_Audio"
@@ -24,12 +25,7 @@ AudioEngine::~AudioEngine() {
     close();
 }
 
-bool AudioEngine::open() {
-    if (mStream) {
-        LOGE("AudioEngine already open");
-        return false;
-    }
-
+bool AudioEngine::openOutputStream() {
     oboe::AudioStreamBuilder builder;
     builder.setDirection(oboe::Direction::Output);
     builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
@@ -46,8 +42,22 @@ bool AudioEngine::open() {
     }
 
     mSampleRate = mStream->getSampleRate();
-    LOGD("Oboe stream opened: SR=%d Hz, channels=%d", 
-         mSampleRate, mStream->getChannelCount());
+    // Keep latency low but glitch-resistant: double-buffer at 2× the burst size.
+    mStream->setBufferSizeInFrames(mStream->getFramesPerBurst() * 2);
+    LOGD("Oboe stream opened: SR=%d Hz, channels=%d, burst=%d",
+         mSampleRate, mStream->getChannelCount(), mStream->getFramesPerBurst());
+    return true;
+}
+
+bool AudioEngine::open() {
+    if (mStream) {
+        LOGE("AudioEngine already open");
+        return false;
+    }
+
+    if (!openOutputStream()) {
+        return false;
+    }
 
     // Initialize master effects
     mMasterFX = std::make_unique<MasterFX>(mSampleRate);
@@ -60,9 +70,12 @@ bool AudioEngine::open() {
     mChoSendL.assign(maxBufFrames, 0.0f); mChoSendR.assign(maxBufFrames, 0.0f);
     mWetL.assign(maxBufFrames, 0.0f);    mWetR.assign(maxBufFrames, 0.0f);
 
-    // Initialize voices
+    // Initialize all voices
     for (int i = 0; i < kMaxVoices; ++i) {
         mVoices[i].instrumentIdx = -1;
+    }
+    // Initialize per-instrument params
+    for (int i = 0; i < kMaxInstruments; ++i) {
         mInstrumentHpCutoff[i].store(0.0f, std::memory_order_relaxed);  // bypass (no HP cut)
         mInstrumentLpCutoff[i].store(1.0f, std::memory_order_relaxed);  // fully open by default
         mInstrumentRevSend[i].store(0.0f, std::memory_order_relaxed);
@@ -87,6 +100,7 @@ bool AudioEngine::open() {
 }
 
 void AudioEngine::close() {
+    closeRecordingStream();
     if (mStream) {
         mStream->close();
         mStream = nullptr;
@@ -120,7 +134,7 @@ void AudioEngine::stop() {
 }
 
 bool AudioEngine::loadSampleMono16(int instrumentIdx, const std::string& wavPath) {
-    if (instrumentIdx < 0 || instrumentIdx >= kMaxVoices) {
+    if (instrumentIdx < 0 || instrumentIdx >= kMaxInstruments) {
         LOGE("Invalid instrument index: %d", instrumentIdx);
         return false;
     }
@@ -137,9 +151,9 @@ bool AudioEngine::loadSampleMono16(int instrumentIdx, const std::string& wavPath
     // Only lock for the data swap itself (microseconds, not milliseconds)
     {
         std::lock_guard<std::mutex> lock(mVoiceMutex);
-        // Stop any voice using this slot before replacing the data
-        mVoices[instrumentIdx].isActive = false;
-        mVoices[instrumentIdx].gain = 0.0f;
+        // Stop the preview voice using this slot before replacing the data
+        mVoices[kSeqVoices + instrumentIdx].isActive = false;
+        mVoices[kSeqVoices + instrumentIdx].gain = 0.0f;
         mSamples[instrumentIdx].mono = std::move(monoData);
         mSamples[instrumentIdx].originalMono = mSamples[instrumentIdx].mono;  // Store original for stretching
         mSamples[instrumentIdx].sampleRate = sampleRate;
@@ -154,7 +168,7 @@ bool AudioEngine::loadSampleMono16(int instrumentIdx, const std::string& wavPath
 }
 
 void AudioEngine::clearSample(int instrumentIdx) {
-    if (instrumentIdx < 0 || instrumentIdx >= kMaxVoices) return;
+    if (instrumentIdx < 0 || instrumentIdx >= kMaxInstruments) return;
 
     std::lock_guard<std::mutex> lock(mVoiceMutex);
     mSamples[instrumentIdx].mono.clear();
@@ -163,12 +177,12 @@ void AudioEngine::clearSample(int instrumentIdx) {
 }
 
 void AudioEngine::noteOn(int instrumentIdx, float frequencyHz, float level) {
-    if (instrumentIdx < 0 || instrumentIdx >= kMaxVoices) return;
+    if (instrumentIdx < 0 || instrumentIdx >= kMaxInstruments) return;
     if (!mSamples[instrumentIdx].isLoaded) return;
 
     std::lock_guard<std::mutex> lock(mVoiceMutex);
 
-    Voice& voice = mVoices[instrumentIdx];
+    Voice& voice = mVoices[kSeqVoices + instrumentIdx];
     voice.instrumentIdx = instrumentIdx;
     voice.isActive = true;
     voice.samplePosition = 0.0;
@@ -190,13 +204,13 @@ void AudioEngine::noteOn(int instrumentIdx, float frequencyHz, float level) {
 }
 
 void AudioEngine::noteOnRegion(int instrumentIdx, float frequencyHz, float level, float startNorm, float endNorm, float attackTime, float releaseTime, int loopMode) {
-    if (instrumentIdx < 0 || instrumentIdx >= kMaxVoices) return;
+    if (instrumentIdx < 0 || instrumentIdx >= kMaxInstruments) return;
     if (!mSamples[instrumentIdx].isLoaded) return;
 
     std::lock_guard<std::mutex> lock(mVoiceMutex);
 
     const int32_t numFrames = mSamples[instrumentIdx].numFrames;
-    Voice& voice = mVoices[instrumentIdx];
+    Voice& voice = mVoices[kSeqVoices + instrumentIdx];
     voice.instrumentIdx = instrumentIdx;
     voice.isActive = true;
     voice.startFrame = startNorm * numFrames;
@@ -230,10 +244,10 @@ void AudioEngine::noteOnRegion(int instrumentIdx, float frequencyHz, float level
 }
 
 void AudioEngine::noteOff(int instrumentIdx) {
-    if (instrumentIdx < 0 || instrumentIdx >= kMaxVoices) return;
+    if (instrumentIdx < 0 || instrumentIdx >= kMaxInstruments) return;
 
     std::lock_guard<std::mutex> lock(mVoiceMutex);
-    Voice& voice = mVoices[instrumentIdx];
+    Voice& voice = mVoices[kSeqVoices + instrumentIdx];
     if (!voice.isActive || voice.isFadingOut) return; // already silent or already fading
     // Snapshot current envelope so the release starts from the right level
     if (voice.attackSamples > 0 && voice.elapsedSamples < voice.attackSamples)
@@ -254,7 +268,7 @@ void AudioEngine::stopAll() {
 }
 
 void AudioEngine::updateStretch(int instrumentIdx, bool enabled, int beats, float bpm, bool preservePitch) {
-    const int safe = (instrumentIdx >= 0 && instrumentIdx < kMaxVoices) ? instrumentIdx : 0;
+    const int safe = (instrumentIdx >= 0 && instrumentIdx < kMaxInstruments) ? instrumentIdx : 0;
 
     // Grab a local copy of the original buffer (under lock, then release)
     std::vector<float> src;
@@ -332,15 +346,15 @@ void AudioEngine::updateStretch(int instrumentIdx, bool enabled, int beats, floa
 }
 
 void AudioEngine::setLevel(int instrumentIdx, float level) {
-    if (instrumentIdx < 0 || instrumentIdx >= kMaxVoices) return;
+    if (instrumentIdx < 0 || instrumentIdx >= kMaxInstruments) return;
     std::lock_guard<std::mutex> lock(mVoiceMutex);
-    mVoices[instrumentIdx].level = level;
+    mVoices[kSeqVoices + instrumentIdx].level = level;
 }
 
 void AudioEngine::setPan(int instrumentIdx, float pan) {
-    if (instrumentIdx < 0 || instrumentIdx >= kMaxVoices) return;
+    if (instrumentIdx < 0 || instrumentIdx >= kMaxInstruments) return;
     std::lock_guard<std::mutex> lock(mVoiceMutex);
-    mVoices[instrumentIdx].pan = pan;
+    mVoices[kSeqVoices + instrumentIdx].pan = pan;
 }
 
 void AudioEngine::setFilterCutoff(int instrumentIdx, float norm) {
@@ -354,8 +368,9 @@ void AudioEngine::setFilterResonance(int instrumentIdx, float norm) {
 }
 
 bool AudioEngine::isVoicePlaying(int instrumentIdx) const {
-    if (instrumentIdx < 0 || instrumentIdx >= kMaxVoices) return false;
-    return mVoices[instrumentIdx].isActive || mVoices[instrumentIdx].gain > 0.001f;
+    if (instrumentIdx < 0 || instrumentIdx >= kMaxInstruments) return false;
+    const auto& voice = mVoices[kSeqVoices + instrumentIdx];
+    return voice.isActive || voice.gain > 0.001f;
 }
 
 // ---------------------------------------------------------------------------
@@ -376,9 +391,9 @@ void AudioEngine::triggerNote(int instrIdx, int midiNote, int vol, int trackIdx,
                                int fx0cmd, int fx0val,
                                int fx1cmd, int fx1val,
                                int fx2cmd, int fx2val) {
-    if (instrIdx < 0 || instrIdx >= kMaxVoices) return;
+    if (instrIdx < 0 || instrIdx >= kMaxInstruments) return;
     if (!mSamples[instrIdx].isLoaded) return;
-    if (trackIdx < 0 || trackIdx >= kMaxVoices) return;
+    if (trackIdx < 0 || trackIdx >= kSeqVoices) return;
 
     const int fxCmds[3] = {fx0cmd, fx1cmd, fx2cmd};
     const int fxVals[3] = {fx0val, fx1val, fx2val};
@@ -585,7 +600,7 @@ void AudioEngine::fireRow(const QueuedRow& row) {
 
         const int trackIdx = std::min((i / stride), 7);
 
-        if (instrIdx < 0 || instrIdx >= kMaxVoices) {
+        if (instrIdx < 0 || instrIdx >= kMaxInstruments) {
             if (midiNote == -2 && trackIdx < 8) {
                 // OFF with no instrument: stop voice on this track
                 Voice& lv = mVoices[trackIdx];
@@ -598,7 +613,7 @@ void AudioEngine::fireRow(const QueuedRow& row) {
             } else if (midiNote >= 0 && trackIdx < 8) {
                 // No instrument on this step — retrigger last instrument at new pitch
                 const int lastInstr = mLastInstrOnTrack[trackIdx];
-                if (lastInstr >= 0 && lastInstr < kMaxVoices) {
+                if (lastInstr >= 0 && lastInstr < kMaxInstruments) {
                     triggerNote(lastInstr, midiNote, vol, trackIdx, row.lineSamples,
                                 fx0cmd, fx0val, fx1cmd, fx1val, fx2cmd, fx2val);
                 }
@@ -693,7 +708,14 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
 
     auto *outputData = static_cast<float *>(audioData);
 
-    std::lock_guard<std::mutex> lock(mVoiceMutex);
+    // Real-time safety: never block the audio thread waiting on the UI thread.
+    // If a UI-thread operation (e.g. sample load / time-stretch buffer swap) holds
+    // the lock, render silence this buffer instead of stalling and underrunning.
+    std::unique_lock<std::mutex> lock(mVoiceMutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        std::fill(outputData, outputData + numFrames * 2, 0.0f);
+        return oboe::DataCallbackResult::Continue;
+    }
 
     // Ensure processing buffers are large enough (resize is rare — only first callback if OS chose large buffer)
     if (numFrames > static_cast<int32_t>(mDryL.size())) {
@@ -775,7 +797,7 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         Voice& voice = mVoices[v];
         if (!voice.isActive && voice.gain < 0.001f) continue;
 
-        if (voice.instrumentIdx < 0 || voice.instrumentIdx >= kMaxVoices) continue;
+        if (voice.instrumentIdx < 0 || voice.instrumentIdx >= kMaxInstruments) continue;
         const SampleData& sample = mSamples[voice.instrumentIdx];
         if (!sample.isLoaded) continue;
 
@@ -836,6 +858,12 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
             lp_a1 = -2.0f * cosw * inv;
             lp_a2 =  (1.0f - alph) * inv;
         }
+
+        // Equal-power pan gains — constant for the whole buffer, so compute the
+        // two trig calls once here instead of per-sample inside the hot loop.
+        const float panAngle = voice.pan * 1.5707963f; // pan * π/2
+        const float panGainL = std::cos(panAngle);
+        const float panGainR = std::sin(panAngle);
 
         float voicePeak = 0.0f;
         for (int i = 0; i < numFrames; ++i) {
@@ -979,10 +1007,9 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                 samp = y;
             }
 
-            // Equal-power stereo pan
-            float angle = voice.pan * 1.5707963f; // pan * π/2
-            float sampL = samp * std::cos(angle);
-            float sampR = samp * std::sin(angle);
+            // Equal-power stereo pan (gains precomputed once per buffer above)
+            float sampL = samp * panGainL;
+            float sampR = samp * panGainR;
 
             // Accumulate into dry and effect send buffers
             mDryL[i] += sampL * trackDryGain;
@@ -1080,6 +1107,111 @@ std::vector<float> AudioEngine::stopExportTap(int& outSampleRate) {
     return std::move(mExportBuffer);
 }
 
+// ---------------------------------------------------------------------------
+// Mic recording — independent low-latency mono input stream
+// ---------------------------------------------------------------------------
+
+// Dedicated data callback that forwards the input stream to the engine.
+class RecordingCallback : public oboe::AudioStreamDataCallback {
+public:
+    explicit RecordingCallback(AudioEngine* engine) : mEngine(engine) {}
+    oboe::DataCallbackResult onAudioReady(
+            oboe::AudioStream* stream, void* audioData, int32_t numFrames) override {
+        return mEngine->onRecordingAudioReady(stream, audioData, numFrames);
+    }
+private:
+    AudioEngine* mEngine;
+};
+
+void AudioEngine::openRecordingStream() {
+    if (mRecordingStream) return; // already open
+
+    if (!mRecordingCallback) {
+        mRecordingCallback = std::make_unique<RecordingCallback>(this);
+    }
+
+    oboe::AudioStreamBuilder builder;
+    builder.setDirection(oboe::Direction::Input);
+    builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
+    builder.setSharingMode(oboe::SharingMode::Shared);
+    builder.setFormat(oboe::AudioFormat::Float);
+    builder.setChannelCount(oboe::ChannelCount::Mono);
+    builder.setDataCallback(mRecordingCallback.get());
+
+    oboe::Result result = builder.openManagedStream(mRecordingStream);
+    if (result != oboe::Result::OK) {
+        LOGE("Failed to open recording input stream: %s", oboe::convertToText(result));
+        mRecordingStream = nullptr;
+        return;
+    }
+
+    mRecordingSampleRate = mRecordingStream->getSampleRate();
+    LOGD("Recording input stream opened: SR=%d Hz", mRecordingSampleRate);
+
+    result = mRecordingStream->requestStart();
+    if (result != oboe::Result::OK) {
+        LOGE("Failed to start recording input stream: %s", oboe::convertToText(result));
+        mRecordingStream->close();
+        mRecordingStream = nullptr;
+    }
+}
+
+void AudioEngine::closeRecordingStream() {
+    mIsRecording.store(false);
+    if (mRecordingStream) {
+        mRecordingStream->stop();
+        mRecordingStream->close();
+        mRecordingStream = nullptr;
+    }
+}
+
+void AudioEngine::startRecording() {
+    {
+        std::lock_guard<std::mutex> lock(mRecordingMutex);
+        mRecordingBuffer.clear();
+        mRecordingBuffer.reserve(kMaxRecordingFrames);
+        mRecordingWarmupFrames = kRecWarmupFrames;
+    }
+    mIsRecording.store(true);
+}
+
+std::vector<float> AudioEngine::stopRecording(int& outSampleRate) {
+    mIsRecording.store(false);
+    std::lock_guard<std::mutex> lock(mRecordingMutex);
+    outSampleRate = mRecordingSampleRate;
+    return std::move(mRecordingBuffer);
+}
+
+oboe::DataCallbackResult AudioEngine::onRecordingAudioReady(
+        oboe::AudioStream* /*stream*/, void* audioData, int32_t numFrames) {
+    if (!mIsRecording.load()) {
+        // Drain silently to keep the stream warm.
+        return oboe::DataCallbackResult::Continue;
+    }
+
+    const float* in = static_cast<const float*>(audioData);
+    std::lock_guard<std::mutex> lock(mRecordingMutex);
+
+    int32_t start = 0;
+    // Skip the warm-up transient at the very start of a take.
+    if (mRecordingWarmupFrames > 0) {
+        const int32_t skip = std::min<int32_t>(mRecordingWarmupFrames, numFrames);
+        mRecordingWarmupFrames -= skip;
+        start = skip;
+    }
+
+    for (int32_t i = start; i < numFrames; ++i) {
+        if (static_cast<int>(mRecordingBuffer.size()) >= kMaxRecordingFrames) {
+            mIsRecording.store(false);
+            break;
+        }
+        mRecordingBuffer.push_back(in[i]);
+    }
+
+    return oboe::DataCallbackResult::Continue;
+}
+
+
 float AudioEngine::processSample(Voice& voice, const SampleData& sample, float effFrequency) {
     if (sample.numFrames == 0) return 0.0f;
 
@@ -1093,18 +1225,24 @@ float AudioEngine::processSample(Voice& voice, const SampleData& sample, float e
         sampleStep = -sampleStep;
     }
 
-    // Linear interpolation
+    // Cubic Hermite (Catmull-Rom) interpolation — eliminates aliasing on pitched samples
     int pos = static_cast<int>(voice.samplePosition);
     if (pos < 0 || pos >= static_cast<int>(sample.numFrames)) {
         voice.isActive = false;
         return 0.0f;
     }
 
-    float frac = voice.samplePosition - pos;
-    float s0 = sample.mono[pos];
-    float s1 = (pos + 1 < static_cast<int>(sample.numFrames)) ? sample.mono[pos + 1] : s0;
+    const int nf = static_cast<int>(sample.numFrames);
+    float frac = static_cast<float>(voice.samplePosition - pos);
+    float sm1 = (pos > 0)      ? sample.mono[pos - 1] : sample.mono[pos];
+    float s0  = sample.mono[pos];
+    float s1  = (pos + 1 < nf) ? sample.mono[pos + 1] : s0;
+    float s2  = (pos + 2 < nf) ? sample.mono[pos + 2] : s1;
 
-    float output = s0 + frac * (s1 - s0);
+    // Catmull-Rom cubic: exact at integer positions, C1 continuous
+    float output = s0 + 0.5f * frac * (s1 - sm1 +
+                   frac * (2.0f * sm1 - 5.0f * s0 + 4.0f * s1 - s2 +
+                   frac * (3.0f * (s0 - s1) + s2 - sm1)));
     voice.samplePosition += sampleStep;
 
     // Handle end/start boundary based on loop mode
@@ -1244,10 +1382,44 @@ bool AudioEngine::parseWavMono16(const std::string& path, std::vector<float>& ou
 
 void AudioEngine::onErrorAfterClose(oboe::AudioStream *audioStream, oboe::Result error) {
     LOGE("Audio stream error after close: %s", oboe::convertToText(error));
+    // A disconnect (headphones unplugged, Bluetooth route change, USB DAC removed)
+    // closes the stream. Rebuild + restart so audio keeps working without a manual
+    // app restart. onErrorAfterClose runs on a dedicated Oboe thread, so it is safe
+    // to reopen the stream here.
+    if (error == oboe::Result::ErrorDisconnected) {
+        restartStream();
+    }
 }
 
 void AudioEngine::onErrorBeforeClose(oboe::AudioStream *audioStream, oboe::Result error) {
     LOGE("Audio stream error before close: %s", oboe::convertToText(error));
+}
+
+void AudioEngine::restartStream() {
+    if (mRestarting.exchange(true)) return;  // a restart is already in progress
+
+    if (mStream) {
+        mStream->close();
+        mStream = nullptr;
+    }
+    mRunning = false;
+
+    // Reopen with the same low-latency config. Samples and per-instrument/track
+    // parameters live outside the stream, so they survive the rebuild untouched.
+    if (!openOutputStream()) {
+        LOGE("restartStream: failed to reopen output stream");
+        mRestarting.store(false);
+        return;
+    }
+    oboe::Result result = mStream->requestStart();
+    if (result != oboe::Result::OK) {
+        LOGE("restartStream: failed to start stream: %s", oboe::convertToText(result));
+        mRestarting.store(false);
+        return;
+    }
+    mRunning = true;
+    LOGD("Audio stream restarted after route change (SR=%d)", mSampleRate);
+    mRestarting.store(false);
 }
 
 // ============ JNI Bridge ============
@@ -1388,7 +1560,7 @@ void AudioEngine::setTrackMute(int trackIdx, bool muted) {
 }
 
 void AudioEngine::setInstrumentSends(int instrIdx, float rev, float del, float cho) {
-    if (instrIdx < 0 || instrIdx >= kMaxVoices) return;
+    if (instrIdx < 0 || instrIdx >= kMaxInstruments) return;
     // Atomic stores — no mutex needed; audio thread reads these atomically
     mInstrumentRevSend[instrIdx].store(std::clamp(rev, 0.0f, 1.0f), std::memory_order_relaxed);
     mInstrumentDelSend[instrIdx].store(std::clamp(del, 0.0f, 1.0f), std::memory_order_relaxed);
@@ -1396,7 +1568,7 @@ void AudioEngine::setInstrumentSends(int instrIdx, float rev, float del, float c
 }
 
 void AudioEngine::setInstrumentFilters(int instrIdx, float hpNorm, float lpNorm) {
-    if (instrIdx < 0 || instrIdx >= kMaxVoices) return;
+    if (instrIdx < 0 || instrIdx >= kMaxInstruments) return;
     // Atomic store — no mutex needed; audio callback reads these atomically, so no blocking
     mInstrumentHpCutoff[instrIdx].store(std::clamp(hpNorm, 0.0f, 1.0f), std::memory_order_relaxed);
     mInstrumentLpCutoff[instrIdx].store(std::clamp(lpNorm, 0.0f, 1.0f), std::memory_order_relaxed);
@@ -1405,7 +1577,7 @@ void AudioEngine::setInstrumentFilters(int instrIdx, float hpNorm, float lpNorm)
 void AudioEngine::setInstrumentPlaybackParams(int instrIdx, float pitch, float volume,
                                                float startNorm, float endNorm,
                                                float attackSec, float releaseSec, int loopMode) {
-    if (instrIdx < 0 || instrIdx >= kMaxVoices) return;
+    if (instrIdx < 0 || instrIdx >= kMaxInstruments) return;
     mInstrumentPitch[instrIdx].store(pitch, std::memory_order_relaxed);
     mInstrumentVolume[instrIdx].store(std::clamp(volume, 0.0f, 1.0f), std::memory_order_relaxed);
     mInstrumentStartNorm[instrIdx].store(std::clamp(startNorm, 0.0f, 1.0f), std::memory_order_relaxed);
@@ -1429,6 +1601,10 @@ void AudioEngine::setReverbWidth(float norm) {
 
 void AudioEngine::setDelayTime(float norm) {
     if (mMasterFX) mMasterFX->setDelayTime(norm);
+}
+
+void AudioEngine::setDelayTimeMs(float ms) {
+    if (mMasterFX) mMasterFX->setDelayTimeMs(ms);
 }
 
 void AudioEngine::setDelayFeedback(float norm) {
@@ -1522,6 +1698,12 @@ JNIEXPORT void JNICALL
 Java_com_metamind_lmt_AudioEnginePlugin_nativeSetDelayTime(JNIEnv *env, jobject obj, jlong handle, jfloat norm) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
     engine->setDelayTime(norm);
+}
+
+JNIEXPORT void JNICALL
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetDelayTimeMs(JNIEnv *env, jobject obj, jlong handle, jfloat ms) {
+    auto* engine = reinterpret_cast<AudioEngine*>(handle);
+    engine->setDelayTimeMs(ms);
 }
 
 JNIEXPORT void JNICALL
@@ -1644,6 +1826,36 @@ Java_com_metamind_lmt_AudioEnginePlugin_nativeStopExportTap(
         JNIEnv* env, jobject, jlong handle, jintArray outSampleRate) {
     int sampleRate = 48000;
     std::vector<float> samples = reinterpret_cast<AudioEngine*>(handle)->stopExportTap(sampleRate);
+    jint* ratePtr = env->GetIntArrayElements(outSampleRate, nullptr);
+    ratePtr[0] = sampleRate;
+    env->ReleaseIntArrayElements(outSampleRate, ratePtr, 0);
+    jfloatArray result = env->NewFloatArray(static_cast<jsize>(samples.size()));
+    if (result != nullptr && !samples.empty()) {
+        env->SetFloatArrayRegion(result, 0, static_cast<jsize>(samples.size()), samples.data());
+    }
+    return result;
+}
+
+JNIEXPORT void JNICALL
+Java_com_metamind_lmt_AudioEnginePlugin_nativeOpenRecordingStream(JNIEnv*, jobject, jlong handle) {
+    reinterpret_cast<AudioEngine*>(handle)->openRecordingStream();
+}
+
+JNIEXPORT void JNICALL
+Java_com_metamind_lmt_AudioEnginePlugin_nativeCloseRecordingStream(JNIEnv*, jobject, jlong handle) {
+    reinterpret_cast<AudioEngine*>(handle)->closeRecordingStream();
+}
+
+JNIEXPORT void JNICALL
+Java_com_metamind_lmt_AudioEnginePlugin_nativeStartRecording(JNIEnv*, jobject, jlong handle) {
+    reinterpret_cast<AudioEngine*>(handle)->startRecording();
+}
+
+JNIEXPORT jfloatArray JNICALL
+Java_com_metamind_lmt_AudioEnginePlugin_nativeStopRecording(
+        JNIEnv* env, jobject, jlong handle, jintArray outSampleRate) {
+    int sampleRate = 48000;
+    std::vector<float> samples = reinterpret_cast<AudioEngine*>(handle)->stopRecording(sampleRate);
     jint* ratePtr = env->GetIntArrayElements(outSampleRate, nullptr);
     ratePtr[0] = sampleRate;
     env->ReleaseIntArrayElements(outSampleRate, ratePtr, 0);

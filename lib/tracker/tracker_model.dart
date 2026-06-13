@@ -14,6 +14,7 @@ class Song {
   final List<List<int>> chains = List.generate(99, (_) => List.filled(8, 0));
   int bpm = 120;
   int lpb = 4; // Lines Per Beat (1–12)
+  int swingPercent = 50; // 50 = straight, 66 = triplet swing, 75 = heavy swing
 }
 
 class Chain {
@@ -90,8 +91,7 @@ class MasterFx {
   double reverbDamp  = 0.5;  // damping   0–1
   double reverbWidth = 1.0;  // stereo width 0–1
   // Delay
-  double delayTimeL    = 4.0;   // lines (1–16)
-  double delayTimeR    = 4.0;   // lines (1–16)
+  int    delayLines    = 50;    // 0–99: 50 = half a line at current BPM/LPB
   double delayFeedback = 0.4;   // 0–1
 
   // Chorus
@@ -582,7 +582,6 @@ class TrackerModel {
   int editMaxChars = 2;
 
   bool inMenuMode = false;
-  List<String> fxList = ['---', 'ARP', 'DEL', 'REV', 'GLI', 'PIT', 'VOL', 'PAN'];
   int menuCursor = 0;
 
   // Double-click detection
@@ -797,7 +796,7 @@ class TrackerModel {
             chains[activeChainIdx].items[cursorRow].fx[fxIndex].value =
                 intValue.clamp(0, 99);
           }
-          // FX name is set via fxList selection, not free numeric entry
+          // FX name is set via the FX command picker, not free numeric entry
         }
       }
     } else if (currentWindow == 2) {
@@ -1174,6 +1173,23 @@ class TrackerModel {
     return ph.steps.length; // 99 — play all lines when no END marker is set
   }
 
+  /// Returns the duration in samples for a given absolute step index, applying
+  /// swing. Even steps (0, 2, 4…) are the downbeat (longer when swing > 50%),
+  /// odd steps are the upbeat (shorter). The pair always sums to 2 × base so
+  /// overall tempo is preserved exactly regardless of swing amount.
+  ///
+  /// [bpm] and [lpb] are the running values at that point in the song.
+  /// [stepIndex] is the global row counter used to decide even/odd.
+  int _swingLineSamples(int bpm, int lpb, int stepIndex) {
+    final int base = (48000.0 * 60.0 / (bpm * lpb)).round();
+    final int swing = song.swingPercent;
+    if (swing == 50) return base; // straight — no math needed
+    final int totalPair = base * 2;
+    final int lineA = (base * swing / 50.0).round(); // downbeat (even)
+    final int lineB = totalPair - lineA;               // upbeat (odd)
+    return stepIndex.isEven ? lineA : lineB;
+  }
+
   // -----------------------------------------------------------------------
   // Build C++ rows for a single chain (chain view playback).
   // Plays chain [chainIdx] on track 0; tracks 1-7 are silent.
@@ -1209,7 +1225,7 @@ class TrackerModel {
             currentBpm = fxValToBpm(fx.value);
           } else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
         }
-        final int lineSamples = (48000.0 * 60.0 / (currentBpm * currentLpb)).round();
+        final int lineSamples = _swingLineSamples(currentBpm, currentLpb, rows.length);
 
         int instrIdx = ps.instrument > 0 ? ps.instrument - 1 : -1;
         int midiNote = ps.note;
@@ -1289,8 +1305,9 @@ class TrackerModel {
         if (trackItems[t].isEmpty) continue;
         final ci = trackItems[t][slot % trackItems[t].length];
         for (final fx in ci.fx) {
-          if (fx.name == 'BPM') currentBpm = fxValToBpm(fx.value);
-          else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
+          if (fx.name == 'BPM') {
+            currentBpm = fxValToBpm(fx.value);
+          } else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
         }
       }
 
@@ -1313,12 +1330,13 @@ class TrackerModel {
           if (phraseLen == 0) continue;
           final ps = ph.steps[step % phraseLen];
           for (final fx in ps.fx) {
-            if (fx.name == 'BPM') currentBpm = fxValToBpm(fx.value);
-            else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
+            if (fx.name == 'BPM') {
+              currentBpm = fxValToBpm(fx.value);
+            } else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
           }
         }
 
-        final int lineSamples = (48000.0 * 60.0 / (currentBpm * currentLpb)).round();
+        final int lineSamples = _swingLineSamples(currentBpm, currentLpb, rows.length);
         final noteData = <int>[];
 
         for (int t = 0; t < 8; t++) {
@@ -1351,8 +1369,9 @@ class TrackerModel {
 
           int? chainVol, chainPan, chainSnr, chainSnd, chainSnc;
           for (final cfx in ci.fx) {
-            if (cfx.name == 'VOL') chainVol = cfx.value;
-            else if (cfx.name == 'PAN') chainPan = cfx.value;
+            if (cfx.name == 'VOL') {
+              chainVol = cfx.value;
+            } else if (cfx.name == 'PAN') chainPan = cfx.value;
             else if (cfx.name == 'SNR') chainSnr = cfx.value;
             else if (cfx.name == 'SND') chainSnd = cfx.value;
             else if (cfx.name == 'SNC') chainSnc = cfx.value;
@@ -1472,7 +1491,7 @@ class TrackerModel {
             }
           }
 
-          final int lineSamples = (48000.0 * 60.0 / (currentBpm * currentLpb)).round();
+          final int lineSamples = _swingLineSamples(currentBpm, currentLpb, rows.length);
 
           final noteData = <int>[];
           for (int t = 0; t < 8; t++) {
@@ -1574,12 +1593,12 @@ class TrackerModel {
     final len = _getPhraseLen(ph);
     if (len == 0) return [];
 
-    final int lineSamples = (48000.0 * 60.0 / (song.bpm * song.lpb)).round();
     final rows = <Map<String, dynamic>>[];
 
     for (int step = 0; step < len; step++) {
       final ps = ph.steps[step];
       if (ps.note == PhraseStep.noteEnd) break;
+      final int lineSamples = _swingLineSamples(song.bpm, song.lpb, step);
       final instrIdx = ps.instrument > 0 ? ps.instrument - 1 : -1;
       // Track 0 carries step data (9 ints); tracks 1-7 are silent (9 zeros each)
       final noteData = <int>[instrIdx, ps.note, ps.volume];

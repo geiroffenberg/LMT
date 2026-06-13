@@ -12,7 +12,9 @@
 #include <jni.h>
 #include "../master_fx.h"
 
-static constexpr int kMaxVoices = 99; // one per instrument in LMT
+static constexpr int kMaxInstruments = 99; // one per instrument in LMT
+static constexpr int kSeqVoices = 8;      // voices 0-7 reserved for sequencer tracks
+static constexpr int kMaxVoices = kSeqVoices + kMaxInstruments; // 8 seq + 99 preview = 107
 
 /// WAV sample data container
 struct SampleData {
@@ -177,7 +179,8 @@ public:
     void setReverbDamping(float norm);   // 0..1
     void setReverbWidth(float norm);     // 0..1
 
-    void setDelayTime(float norm);       // 0..1 → ~10..2000 ms
+    void setDelayTime(float norm);       // 0..1 → ~10..2000 ms (legacy)
+    void setDelayTimeMs(float ms);       // direct ms (tempo-synced UI)
     void setDelayFeedback(float norm);   // 0..1
 
     void setChorusRate(float norm);      // 0..1 → ~0.1..8 Hz
@@ -213,6 +216,18 @@ public:
     void startExportTap();
     std::vector<float> stopExportTap(int& outSampleRate);
 
+    // -----------------------------------------------------------------------
+    // Mic recording — independent low-latency mono input stream
+    // -----------------------------------------------------------------------
+    void openRecordingStream();   // open + start the input stream (kept warm)
+    void closeRecordingStream();  // stop + close the input stream
+    void startRecording();        // begin accumulating mic input into buffer
+    std::vector<float> stopRecording(int& outSampleRate); // stop + return mono samples
+
+    // Called from the recording input stream's audio thread
+    oboe::DataCallbackResult onRecordingAudioReady(
+        oboe::AudioStream* stream, void* audioData, int32_t numFrames);
+
     // Master chain: EQ-5 → HP → LP → Limiter → Volume
     void setEqBand(int band, float dBgain);   // band 0-4, dBgain -12..+12
     void setHpFreq(float hz);                  // 20..1000 Hz
@@ -234,7 +249,7 @@ public:
 
 private:
     oboe::ManagedStream mStream;
-    std::array<SampleData, kMaxVoices> mSamples;
+    std::array<SampleData, kMaxInstruments> mSamples;
     std::array<Voice, kMaxVoices> mVoices;
     std::mutex mVoiceMutex;
 
@@ -264,23 +279,23 @@ private:
     std::atomic<float> mTrackLevel[8];      // initialized to 1.0 in open()
     std::atomic<bool>  mTrackMuted[8];      // initialized to false in open()
 
-    // Per-instrument send levels (kMaxVoices instruments) — atomic for lock-free UI thread writes
-    std::atomic<float> mInstrumentRevSend[kMaxVoices];
-    std::atomic<float> mInstrumentDelSend[kMaxVoices];
-    std::atomic<float> mInstrumentChoSend[kMaxVoices];
+    // Per-instrument send levels (kMaxInstruments) — atomic for lock-free UI thread writes
+    std::atomic<float> mInstrumentRevSend[kMaxInstruments];
+    std::atomic<float> mInstrumentDelSend[kMaxInstruments];
+    std::atomic<float> mInstrumentChoSend[kMaxInstruments];
 
     // Per-instrument HP/LP cutoff (0..1 norm) — atomic so UI thread can write without locking
-    std::atomic<float> mInstrumentHpCutoff[kMaxVoices];
-    std::atomic<float> mInstrumentLpCutoff[kMaxVoices];  // initialized to 1.0 in open()
+    std::atomic<float> mInstrumentHpCutoff[kMaxInstruments];
+    std::atomic<float> mInstrumentLpCutoff[kMaxInstruments];  // initialized to 1.0 in open()
 
     // Per-instrument playback params (set from Dart sampler window, read in fireRow)
-    std::atomic<float> mInstrumentPitch[kMaxVoices];      // octave offset -1..+1 (stored as SamplerParams.pitch)
-    std::atomic<float> mInstrumentVolume[kMaxVoices];     // base volume 0..1
-    std::atomic<float> mInstrumentStartNorm[kMaxVoices];  // playback start 0..1
-    std::atomic<float> mInstrumentEndNorm[kMaxVoices];    // playback end 0..1
-    std::atomic<float> mInstrumentAttack[kMaxVoices];     // attack time in seconds
-    std::atomic<float> mInstrumentRelease[kMaxVoices];    // release time in seconds
-    std::atomic<int>   mInstrumentLoopMode[kMaxVoices];   // 0=OFF,1=LOOP,2=PING
+    std::atomic<float> mInstrumentPitch[kMaxInstruments];      // octave offset -1..+1 (stored as SamplerParams.pitch)
+    std::atomic<float> mInstrumentVolume[kMaxInstruments];     // base volume 0..1
+    std::atomic<float> mInstrumentStartNorm[kMaxInstruments];  // playback start 0..1
+    std::atomic<float> mInstrumentEndNorm[kMaxInstruments];    // playback end 0..1
+    std::atomic<float> mInstrumentAttack[kMaxInstruments];     // attack time in seconds
+    std::atomic<float> mInstrumentRelease[kMaxInstruments];    // release time in seconds
+    std::atomic<int>   mInstrumentLoopMode[kMaxInstruments];   // 0=OFF,1=LOOP,2=PING
 
     // Per-track peak levels for VU meters (linear 0..1, audio-thread write / JNI read)
     float mTrackPeakLinear[8] = {};
@@ -312,11 +327,29 @@ private:
     // WAV file parsing
     bool parseWavMono16(const std::string& path, std::vector<float>& outMono, int32_t& outSampleRate);
 
+    // Open + configure the Oboe output stream (shared by open() and restartStream()).
+    bool openOutputStream();
+    // Rebuild + restart the output stream after a disconnect/route change,
+    // preserving all loaded samples and per-instrument/track parameters.
+    void restartStream();
+    std::atomic<bool> mRestarting{false};
+
     // Export tap state
     static constexpr int kMaxExportFrames = 48000 * 60 * 10; // 10 minutes
     std::mutex           mExportMutex;
     std::atomic<bool>    mExportTapActive{false};
     std::vector<float>   mExportBuffer; // interleaved stereo L,R
+
+    // Mic recording state (separate input stream + callback)
+    static constexpr int kMaxRecordingFrames = 48000 * 60; // 60 s mono
+    static constexpr int kRecWarmupFrames    = 4096;        // ~85 ms transient skip
+    oboe::ManagedStream                      mRecordingStream;
+    std::unique_ptr<class RecordingCallback> mRecordingCallback;
+    std::atomic<bool>                        mIsRecording{false};
+    std::vector<float>                       mRecordingBuffer;
+    std::mutex                               mRecordingMutex;
+    int                                      mRecordingWarmupFrames = 0;
+    int32_t                                  mRecordingSampleRate   = 48000;
 
     // Last instrument triggered per track (0-7) — used to retrigger at a new
     // pitch when a step has a note but no instrument column set.

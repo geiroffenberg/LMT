@@ -34,6 +34,12 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   Timer? _stepTimer;
   Timer? _meterTimer;
 
+  // VU-meter values pushed to small, isolated listeners so the 80ms meter poll
+  // and the playhead poll never trigger a full-screen rebuild.
+  final ValueNotifier<List<double>> _trackPeaksVN =
+      ValueNotifier<List<double>>(List.filled(8, 0.0));
+  final ValueNotifier<double> _masterPeakVN = ValueNotifier<double>(0.0);
+
   // Playback tracking
   List<int> _songRowMap    = [];  // C++ row index → song row number
   List<int> _chainRowMap   = [];  // C++ row index → chain slot number
@@ -79,6 +85,8 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     _stepTimer?.cancel();
     _meterTimer?.cancel();
     _keyListenerFocusNode.dispose();
+    _trackPeaksVN.dispose();
+    _masterPeakVN.dispose();
     super.dispose();
   }
 
@@ -121,10 +129,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       // Engine resets on init — restore HP/LP filters too.
       await NativeAudioEngine.setInstrumentFilters(i, s.hpCutoff, s.lpCutoff);
     }
-    // Push current mixer + mute state to the engine so the audio side
-    // matches the model after init/resume/load.
+    // Push current mixer + mute + master FX state to the engine.
     _syncMixerSendsToNative();
     _syncTrackMutesToNative();
+    _syncMasterFxToNative();
   }
 
   // Autosave disabled — use SAVE SONG from the menu
@@ -143,13 +151,17 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       NativeAudioEngine.getMasterPeak().then((v) => [v]),
     ]);
     if (!mounted) return;
-    setState(() {
-      final peaks = results[0];
-      for (int i = 0; i < 8 && i < peaks.length; i++) {
-        model.audioLevels[i] = peaks[i];
-      }
-      model.masterPeak = results[1][0];
-    });
+    // Push to isolated ValueNotifiers — only the meter widgets repaint, not the
+    // whole screen. Mirror into the model so other readers stay consistent.
+    final peaks = results[0];
+    final newLevels = List<double>.filled(8, 0.0);
+    for (int i = 0; i < 8 && i < peaks.length; i++) {
+      newLevels[i] = peaks[i];
+      model.audioLevels[i] = peaks[i];
+    }
+    model.masterPeak = results[1][0];
+    _trackPeaksVN.value = newLevels;
+    _masterPeakVN.value = results[1][0];
   }
 
   /// Preview a note in phrase window when it's edited (note or instrument column)
@@ -179,8 +191,31 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     );
   }
 
-  void _syncMixerSendsToNative() {
-    for (int i = 0; i < model.mixerChannels.length; i++) {
+  void _syncMasterFxToNative() {
+    final fx = model.masterFx;
+    NativeAudioEngine.setReverbSize(fx.reverbSize);
+    NativeAudioEngine.setReverbDamping(fx.reverbDamp);
+    NativeAudioEngine.setReverbWidth(fx.reverbWidth);
+    final delayMs = (fx.delayLines / 100.0) * 60000.0 /
+        (model.song.bpm * model.song.lpb);
+    NativeAudioEngine.setDelayTimeMs(delayMs);
+    NativeAudioEngine.setDelayFeedback(fx.delayFeedback);
+    NativeAudioEngine.setChorusRate((fx.chorusRate - 0.1) / 4.9);
+    NativeAudioEngine.setChorusDepth(fx.chorusDepth);
+    NativeAudioEngine.setEqBand(0, fx.eqBand1);
+    NativeAudioEngine.setEqBand(1, fx.eqBand2);
+    NativeAudioEngine.setEqBand(2, fx.eqBand3);
+    NativeAudioEngine.setEqBand(3, fx.eqBand4);
+    NativeAudioEngine.setEqBand(4, fx.eqBand5);
+    NativeAudioEngine.setHpFreq(fx.hpFreq);
+    NativeAudioEngine.setHpRes(fx.hpRes);
+    NativeAudioEngine.setLpFreq(fx.lpFreq);
+    NativeAudioEngine.setLpRes(fx.lpRes);
+    NativeAudioEngine.setLimiterThreshold(fx.limiterThreshold);
+    NativeAudioEngine.setMasterVolume(fx.masterVolume);
+  }
+
+  void _syncMixerSendsToNative() {    for (int i = 0; i < model.mixerChannels.length; i++) {
       final ch = model.mixerChannels[i];
       NativeAudioEngine.setTrackSends(
         i,
@@ -389,7 +424,17 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         if (item.phrase <= 0) return;
         model.activePhraseIdx = item.phrase - 1;
       } else if (fromWindow == 0) {
-        return; // must go Song → Chain first
+        // Direct from song: resolve the chain from the song cursor, then land
+        // on the last active phrase (same as if the user had gone via chain view).
+        final chainRef = model.song.chains[model.cursorRow][model.cursorCol];
+        if (chainRef <= 0) return;
+        model.activeChainIdx = chainRef - 1;
+        // _savedPhraseIdx holds the last phrase the user edited — reuse it.
+        // If this chain has no valid phrase at all, block the jump.
+        final chain = model.chains[model.activeChainIdx];
+        final hasPhrase = chain.items.any((item) => item.phrase > 0);
+        if (!hasPhrase && model.phrases[_savedPhraseIdx].steps.every(
+              (s) => s.note == PhraseStep.noteNone)) return;
       } else if (fromWindow == 3 || fromWindow == 4) {
         // From instrument/mixer: restore saved phrase index
         model.activePhraseIdx = _savedPhraseIdx;
@@ -402,29 +447,11 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     model.currentWindow = windowIndex;
 
     if (windowIndex == 0) {
-      if (fromWindow == 3 || fromWindow == 4) {
-        // Returning from instrument/mixer: restore the exact song cursor the
-        // user had before leaving song view.
-        model.cursorRow = _songCursorRow;
-        model.cursorCol = _songCursorCol;
-      } else {
-        // Returning from chain/phrase: land on the song cell that references
-        // the active chain so the breadcrumb stays consistent.
-        final targetChain = model.activeChainIdx + 1;
-        bool found = false;
-        outer:
-        for (int r = 0; r < model.song.chains.length; r++) {
-          for (int c = 0; c < model.song.chains[r].length; c++) {
-            if (model.song.chains[r][c] == targetChain) {
-              model.cursorRow = r;
-              model.cursorCol = c;
-              found = true;
-              break outer;
-            }
-          }
-        }
-        if (!found) { model.cursorRow = 0; model.cursorCol = 0; }
-      }
+      // Always restore the exact song cursor saved when the user left song view.
+      // The saved values already point to the correct cell regardless of whether
+      // we're returning from chain, phrase, instrument, or mixer.
+      model.cursorRow = _songCursorRow;
+      model.cursorCol = _songCursorCol;
     } else if (windowIndex == 1) {
       // Chain window: start at row 0 when arriving fresh from song view;
       // restore saved cursor when returning from phrase/instrument/mixer.
@@ -606,8 +633,6 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                       ),
                       ...List.generate(8, (ch) {
                         final level = model.mixerChannels[ch].level;
-                        final audioLevel = model.audioLevels[ch];
-                        final bool isMuted  = model.mutedTracks.contains(ch);
                         final bool isSoloed = model.soloedTracks.contains(ch);
                         return Expanded(
                           child: Column(
@@ -622,7 +647,12 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                                   setState(() {});
                                   _syncTrackMutesToNative();
                                 },
-                                child: Builder(builder: (context) {
+                                child: RepaintBoundary(
+                                  child: ValueListenableBuilder<List<double>>(
+                                    valueListenable: _trackPeaksVN,
+                                    builder: (context, peaks, _) {
+                                  final double audioLevel =
+                                      ch < peaks.length ? peaks[ch] : 0.0;
                                   final double dB = audioLevel > 1e-6
                                       ? 20.0 * math.log(audioLevel) / math.ln10
                                       : -60.0;
@@ -672,7 +702,9 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                                       ],
                                     ),
                                   );
-                                }),
+                                    },
+                                  ),
+                                ),
                               ),
                               const SizedBox(height: 2),
                               // Level number
@@ -1170,6 +1202,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       model.clearUndoHistory();
       _syncMixerSendsToNative();
       _syncTrackMutesToNative();
+      _syncMasterFxToNative();
 
       _showStatusSnackBar(true, 'Imported: $projectName');
       return;
@@ -1455,13 +1488,15 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     model.clearUndoHistory();
     _syncMixerSendsToNative();
     _syncTrackMutesToNative();
+    _syncMasterFxToNative();
   }
 
   Future<void> _showSongSettingsDialog() async {
-    int bpmVal = model.song.bpm;
-    int lpbVal = model.song.lpb;
+    int bpmVal   = model.song.bpm;
+    int lpbVal   = model.song.lpb;
+    int swingVal = model.song.swingPercent;
 
-    final result = await showDialog<(int, int)>(
+    final result = await showDialog<(int, int, int)>(
       context: context,
       barrierColor: Colors.black54,
       builder: (ctx) {
@@ -1471,6 +1506,8 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                 setDialogState(() => bpmVal = (bpmVal + delta).clamp(60, 300));
             void adjustLpb(int delta) =>
                 setDialogState(() => lpbVal = (lpbVal + delta).clamp(1, 12));
+            void adjustSwing(int delta) =>
+                setDialogState(() => swingVal = (swingVal + delta).clamp(50, 75));
 
             // A single spinner row: label / range hint / [−] [value] [+]
             Widget spinRow({
@@ -1582,6 +1619,13 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                             value: lpbVal,
                             onAdjust: adjustLpb,
                           ),
+                          const SizedBox(height: 24),
+                          spinRow(
+                            label: 'SWING %',
+                            range: '50 = straight  75 = heavy',
+                            value: swingVal,
+                            onAdjust: adjustSwing,
+                          ),
                         ],
                       ),
                     ),
@@ -1606,7 +1650,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                           Container(width: 1, color: Colors.white),
                           Expanded(
                             child: GestureDetector(
-                              onTap: () => Navigator.pop(ctx, (bpmVal, lpbVal)),
+                              onTap: () => Navigator.pop(ctx, (bpmVal, lpbVal, swingVal)),
                               child: Container(
                                 padding: const EdgeInsets.symmetric(vertical: 14),
                                 alignment: Alignment.center,
@@ -1630,6 +1674,11 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       setState(() {
         model.song.bpm = result.$1;
         model.song.lpb = result.$2;
+        model.song.swingPercent = result.$3;
+        // Resync delay ms — BPM/LPB change shifts the beat-relative delay time.
+        final delayMs = (model.masterFx.delayLines / 100.0) * 60000.0 /
+            (model.song.bpm * model.song.lpb);
+        NativeAudioEngine.setDelayTimeMs(delayMs);
       });
     }
   }
@@ -1918,7 +1967,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
           },
         );
       case 4:
-        return MixerWindow(model: model, onStateChange: () => setState(() {}));
+        return MixerWindow(model: model, onStateChange: () => setState(() {}), masterPeak: _masterPeakVN);
       default:
         return Container();
     }

@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="29" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <!-- Microphone: required for in-app sample recording -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     
     <application
         android:label="Little Moby Tracker"
