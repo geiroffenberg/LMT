@@ -321,6 +321,11 @@ private:
                      int fx1cmd, int fx1val,
                      int fx2cmd, int fx2val);
 
+    // Apply a single FX command to a voice's modulation state. Shared by
+    // triggerNote (note-on FX) and fireRow (continuation FX on a held voice).
+    // Must be called under mVoiceMutex.
+    void applyFxToVoice(Voice& v, int cmd, int val, int32_t lineSamples);
+
     // Audio processing helpers
     float processSample(Voice& voice, const SampleData& sample, float effFrequency);
 

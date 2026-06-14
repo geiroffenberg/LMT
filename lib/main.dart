@@ -87,6 +87,18 @@ void main() async {
     // Push HP/LP filters too so phrase playback is filtered without
     // needing to open the sampler window first.
     await NativeAudioEngine.setInstrumentFilters(i, s.hpCutoff, s.lpCutoff);
+    // Restore time-stretch if it was active — the raw WAV was just loaded so
+    // the DSP must be re-applied (native engine resets on every app start).
+    if (samplePath.isNotEmpty && s.stretchEnabled) {
+      await NativeAudioEngine.updateStretch(
+        i,
+        true,
+        s.stretchLines,
+        model.song.lpb,
+        model.song.bpm.toDouble(),
+        s.stretchPreservePitch,
+      );
+    }
   }
 
   runApp(LMTApp(initialModel: model));
