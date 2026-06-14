@@ -151,7 +151,7 @@ public:
     void setFilterResonance(int instrumentIdx, float norm); // 0..1
 
     // Time stretching
-    void updateStretch(int instrumentIdx, bool enabled, int beats, float bpm, bool preservePitch);
+    void updateStretch(int instrumentIdx, bool enabled, int lines, int lpb, float bpm, bool preservePitch);
 
     // Monitoring
     bool isVoicePlaying(int instrumentIdx) const;

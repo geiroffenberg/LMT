@@ -434,7 +434,9 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         final chain = model.chains[model.activeChainIdx];
         final hasPhrase = chain.items.any((item) => item.phrase > 0);
         if (!hasPhrase && model.phrases[_savedPhraseIdx].steps.every(
-              (s) => s.note == PhraseStep.noteNone)) return;
+              (s) => s.note == PhraseStep.noteNone)) {
+          return;
+        }
       } else if (fromWindow == 3 || fromWindow == 4) {
         // From instrument/mixer: restore saved phrase index
         model.activePhraseIdx = _savedPhraseIdx;

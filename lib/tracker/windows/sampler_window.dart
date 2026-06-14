@@ -800,8 +800,9 @@ class _SamplerWindowState extends State<SamplerWindow> {
                               Duration? regionDuration;
                               
                               if (currentSampler.stretchEnabled) {
-                                // Stretched: use stretchLines and BPM to calculate duration
-                                final durationSecs = (currentSampler.stretchLines * 60.0) / model.song.bpm;
+                                // Stretched: use stretchLines, LPB, and BPM to calculate duration
+                                final durationSecs = (currentSampler.stretchLines * 60.0) /
+                                    (model.song.bpm * model.song.lpb);
                                 regionDuration = Duration(milliseconds: (durationSecs * 1000).toInt());
                               } else {
                                 // Original: read from WAV file
@@ -1462,6 +1463,7 @@ class _SamplerWindowState extends State<SamplerWindow> {
         instrumentIdx,
         sampler.stretchEnabled,
         sampler.stretchLines,
+        model.song.lpb,
         model.song.bpm.toDouble(),
         sampler.stretchPreservePitch,
       );
@@ -1470,7 +1472,7 @@ class _SamplerWindowState extends State<SamplerWindow> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(sampler.stretchEnabled 
-              ? 'Stretched to ${sampler.stretchLines} beats @ ${model.song.bpm} BPM'
+              ? 'Stretched to ${sampler.stretchLines} lines @ ${model.song.bpm} BPM / LPB ${model.song.lpb}'
               : 'Restored to original'),
             duration: const Duration(seconds: 2),
           ),

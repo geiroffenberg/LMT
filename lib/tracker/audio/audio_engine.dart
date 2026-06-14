@@ -97,14 +97,15 @@ class NativeAudioEngine {
   static Future<void> setPan(int instrumentIdx, double pan) =>
       _invoke('setPan', {'instrumentIdx': instrumentIdx, 'pan': pan});
 
-  /// Apply time-stretching to a sample (beat-sync).
+  /// Apply time-stretching to a sample (line-sync).
   /// [preservePitch] true → WSOLA (keeps pitch); false → resampling.
-  static Future<void> updateStretch(int instrumentIdx, bool enabled, int beats,
-          double bpm, bool preservePitch) =>
+  static Future<void> updateStretch(int instrumentIdx, bool enabled, int lines,
+          int lpb, double bpm, bool preservePitch) =>
       _invoke('updateStretch', {
         'instrumentIdx': instrumentIdx,
         'enabled': enabled,
-        'beats': beats,
+        'lines': lines,
+        'lpb': lpb,
         'bpm': bpm,
         'preservePitch': preservePitch,
       });

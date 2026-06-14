@@ -267,7 +267,7 @@ void AudioEngine::stopAll() {
     }
 }
 
-void AudioEngine::updateStretch(int instrumentIdx, bool enabled, int beats, float bpm, bool preservePitch) {
+void AudioEngine::updateStretch(int instrumentIdx, bool enabled, int lines, int lpb, float bpm, bool preservePitch) {
     const int safe = (instrumentIdx >= 0 && instrumentIdx < kMaxInstruments) ? instrumentIdx : 0;
 
     // Grab a local copy of the original buffer (under lock, then release)
@@ -293,14 +293,14 @@ void AudioEngine::updateStretch(int instrumentIdx, bool enabled, int beats, floa
         return;
     }
 
-    if (bpm <= 0.0f || beats <= 0) {
-        LOGE("Stretch: invalid bpm=%.2f beats=%d for slot %d", bpm, beats, safe);
+    if (bpm <= 0.0f || lines <= 0 || lpb <= 0) {
+        LOGE("Stretch: invalid bpm=%.2f lines=%d lpb=%d for slot %d", bpm, lines, lpb, safe);
         return;
     }
 
-    // Compute target length
+    // Compute target length: lines / lpb gives beats, then beats * 60 / bpm gives seconds
     const size_t origFrames   = src.size();
-    const double targetSecs   = (static_cast<double>(beats) * 60.0) / static_cast<double>(bpm);
+    const double targetSecs   = (static_cast<double>(lines) * 60.0) / (static_cast<double>(bpm) * static_cast<double>(lpb));
     const size_t targetFrames = static_cast<size_t>(targetSecs * static_cast<double>(srcSampleRate));
 
     if (targetFrames < 2) {
@@ -308,8 +308,8 @@ void AudioEngine::updateStretch(int instrumentIdx, bool enabled, int beats, floa
         return;
     }
 
-    LOGD("Stretch: slot %d  orig=%zu  target=%zu  beats=%d  bpm=%.2f  preservePitch=%d",
-         safe, origFrames, targetFrames, beats, bpm, preservePitch ? 1 : 0);
+    LOGD("Stretch: slot %d  orig=%zu  target=%zu  lines=%d  lpb=%d  bpm=%.2f  preservePitch=%d",
+         safe, origFrames, targetFrames, lines, lpb, bpm, preservePitch ? 1 : 0);
 
     std::vector<float> stretched;
 
@@ -1533,9 +1533,9 @@ Java_com_metamind_lmt_AudioEnginePlugin_nativeSetPan(JNIEnv *env, jobject obj, j
 JNIEXPORT void JNICALL
 Java_com_metamind_lmt_AudioEnginePlugin_nativeUpdateStretch(JNIEnv *env, jobject obj, jlong handle,
                                                             jint instrumentIdx, jboolean enabled,
-                                                            jint beats, jfloat bpm, jboolean preservePitch) {
+                                                            jint lines, jint lpb, jfloat bpm, jboolean preservePitch) {
     auto* engine = reinterpret_cast<AudioEngine*>(handle);
-    engine->updateStretch(instrumentIdx, enabled, beats, bpm, preservePitch);
+    engine->updateStretch(instrumentIdx, enabled, lines, lpb, bpm, preservePitch);
 }
 
 // ---------------------------------------------------------------------------
