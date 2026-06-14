@@ -463,111 +463,152 @@ void AudioEngine::triggerNote(int instrIdx, int midiNote, int vol, int trackIdx,
     v.retVolCurve     = 0;
 
     // --- Apply FX slots ---
-    const float kTwoPi = 6.2831853f;
     for (int f = 0; f < 3; f++) {
-        const int cmd = fxCmds[f];
-        const int val = fxVals[f];
-        switch (cmd) {
-            case FX_VOL: /* already applied above */ break;
+        applyFxToVoice(v, fxCmds[f], fxVals[f], lineSamples);
+    }
+}
 
-            case FX_PAN:
-                v.pan = val / 99.0f;
-                break;
-
-            case FX_REV:
-                // Play sample backwards: use pingDir mechanism, start at end
-                v.pingDir        = true;
-                v.samplePosition = v.endFrame > 1.0 ? v.endFrame - 1.0 : v.endFrame;
-                break;
-
-            case FX_KIL:
-                // Cut note after val% of the row duration
-                v.kilCountdown = static_cast<int32_t>((val / 99.0f) * lineSamples);
-                if (v.kilCountdown < 1) v.kilCountdown = 1;
-                break;
-
-            case FX_PIT: {
-                // Fine pitch: 00=-1 semitone, 50=0, 99=+1 semitone
-                const float cents = (val - 50) * 2.0f;   // -100..+100 cents
-                v.frequency  *= std::pow(2.0f, cents / 1200.0f);
-                v.arpBaseFreq = v.frequency;
-                break;
+// ---------------------------------------------------------------------------
+// applyFxToVoice — apply a single FX command to a voice's modulation state.
+// Shared by triggerNote (note-on) and fireRow (continuation FX on held voice).
+// Must be called under mVoiceMutex.
+// ---------------------------------------------------------------------------
+void AudioEngine::applyFxToVoice(Voice& v, int cmd, int val, int32_t lineSamples) {
+    const float kTwoPi = 6.2831853f;
+    switch (cmd) {
+        case FX_VOL:
+            // Set per-voice level, scaled by the instrument's base volume so
+            // note-on and continuation paths produce identical gain. At note-on
+            // triggerNote also pre-applies this from the vol column.
+            if (v.instrumentIdx >= 0 && v.instrumentIdx < kMaxInstruments) {
+                const float baseVol = mInstrumentVolume[v.instrumentIdx].load(std::memory_order_relaxed);
+                v.level = (val / 99.0f) * baseVol;
+            } else {
+                v.level = val / 99.0f;
             }
+            break;
 
-            case FX_SNR: v.reverbSend = val / 99.0f; break;
-            case FX_SND: v.delaySend  = val / 99.0f; break;
-            case FX_SNC: v.chorusSend = val / 99.0f; break;
+        case FX_PAN:
+            v.pan = val / 99.0f;
+            break;
 
-            case FX_ARP: {
-                // XY: X=1st interval (0-9 semitones), Y=2nd interval (0-9 semitones)
-                v.arpInterval1   = val / 10;
-                v.arpInterval2   = val % 10;
-                v.arpBaseFreq    = v.frequency;
-                v.arpStepSamples = std::max(1, lineSamples / 3);
-                v.arpStep = 0;  v.arpPhase = 0;
-                break;
-            }
+        case FX_REV:
+            // Play sample backwards: use pingDir mechanism, start at end
+            v.pingDir        = true;
+            v.samplePosition = v.endFrame > 1.0 ? v.endFrame - 1.0 : v.endFrame;
+            break;
 
-            case FX_SLU: {
-                // XY: X=lines (1-9), Y=semitones (1-9) — slide UP
-                const int lines = std::max(1, val / 10);
-                const int semis = val % 10;
-                v.slideTargetHz = v.frequency * std::pow(2.0f, semis / 12.0f);
-                v.slideRateHz   = (v.slideTargetHz - v.frequency) / static_cast<float>(lines * lineSamples);
-                break;
-            }
+        case FX_KIL:
+            // Cut note after val% of the row duration
+            v.kilCountdown = static_cast<int32_t>((val / 99.0f) * lineSamples);
+            if (v.kilCountdown < 1) v.kilCountdown = 1;
+            break;
 
-            case FX_SLD: {
-                // XY: X=lines, Y=semitones — slide DOWN
-                const int lines = std::max(1, val / 10);
-                const int semis = val % 10;
-                v.slideTargetHz = v.frequency * std::pow(2.0f, -semis / 12.0f);
-                v.slideRateHz   = (v.slideTargetHz - v.frequency) / static_cast<float>(lines * lineSamples);
-                break;
-            }
-
-            case FX_VIB: {
-                // XY: X=speed (0-9 → 0.5-8 Hz), Y=depth (0-9 → 0-100 cents)
-                const float lfoHz = 0.5f + (val / 10) * 0.833f;
-                v.vibRateRad    = kTwoPi * lfoHz / static_cast<float>(mSampleRate);
-                v.vibDepthCents = (val % 10) * 11.1f;
-                v.vibPhase      = 0.0f;
-                break;
-            }
-
-            case FX_TRE: {
-                // XY: X=speed, Y=depth (0-9 → 0-100% amplitude)
-                const float lfoHz = 0.5f + (val / 10) * 0.833f;
-                v.treRateRad = kTwoPi * lfoHz / static_cast<float>(mSampleRate);
-                v.treDepth   = (val % 10) / 9.0f;
-                v.trePhase   = 0.0f;
-                break;
-            }
-
-            case FX_GAT: {
-                // XY: X=speed, Y=gate depth
-                const float lfoHz = 0.5f + (val / 10) * 0.833f;
-                v.gatRateRad = kTwoPi * lfoHz / static_cast<float>(mSampleRate);
-                v.gatDepth   = (val % 10) / 9.0f;
-                v.gatPhase   = 0.0f;
-                break;
-            }
-
-            case FX_RET: {
-                // XY: X=vol curve (0-9), Y=retrig count (1-9)
-                const int curve = val / 10;
-                const int count = val % 10;
-                if (count > 0) {
-                    v.retCount         = count;
-                    v.retPeriodSamples = std::max(1, lineSamples / (count + 1));
-                    v.retPhase         = 0;
-                    v.retVolCurve      = curve;
-                }
-                break;
-            }
-
-            default: break;
+        case FX_PIT: {
+            // Fine pitch: 00=-1 semitone, 50=0, 99=+1 semitone
+            const float cents = (val - 50) * 2.0f;   // -100..+100 cents
+            v.frequency  *= std::pow(2.0f, cents / 1200.0f);
+            v.arpBaseFreq = v.frequency;
+            break;
         }
+
+        case FX_SNR: v.reverbSend = val / 99.0f; break;
+        case FX_SND: v.delaySend  = val / 99.0f; break;
+        case FX_SNC: v.chorusSend = val / 99.0f; break;
+
+        case FX_ARP: {
+            // XY: X=1st interval (0-9 semitones), Y=2nd interval (0-9 semitones)
+            v.arpInterval1   = val / 10;
+            v.arpInterval2   = val % 10;
+            v.arpBaseFreq    = v.frequency;
+            v.arpStepSamples = std::max(1, lineSamples / 3);
+            v.arpStep = 0;  v.arpPhase = 0;
+            break;
+        }
+
+        case FX_SLU: {
+            // XY: X=lines (1-9), Y=semitones (1-9) — slide UP
+            const int lines = std::max(1, val / 10);
+            const int semis = val % 10;
+            v.slideTargetHz = v.frequency * std::pow(2.0f, semis / 12.0f);
+            v.slideRateHz   = (v.slideTargetHz - v.frequency) / static_cast<float>(lines * lineSamples);
+            break;
+        }
+
+        case FX_SLD: {
+            // XY: X=lines, Y=semitones — slide DOWN
+            const int lines = std::max(1, val / 10);
+            const int semis = val % 10;
+            v.slideTargetHz = v.frequency * std::pow(2.0f, -semis / 12.0f);
+            v.slideRateHz   = (v.slideTargetHz - v.frequency) / static_cast<float>(lines * lineSamples);
+            break;
+        }
+
+        case FX_VIB: {
+            // XY: X=speed (0-9 → 0.5-8 Hz), Y=depth (0-9 → 0-100 cents)
+            const float lfoHz = 0.5f + (val / 10) * 0.833f;
+            v.vibRateRad    = kTwoPi * lfoHz / static_cast<float>(mSampleRate);
+            v.vibDepthCents = (val % 10) * 11.1f;
+            v.vibPhase      = 0.0f;
+            break;
+        }
+
+        case FX_TRE: {
+            // XY: X=speed, Y=depth (0-9 → 0-100% amplitude)
+            const float lfoHz = 0.5f + (val / 10) * 0.833f;
+            v.treRateRad = kTwoPi * lfoHz / static_cast<float>(mSampleRate);
+            v.treDepth   = (val % 10) / 9.0f;
+            v.trePhase   = 0.0f;
+            break;
+        }
+
+        case FX_GAT: {
+            // XY: X=speed, Y=gate depth
+            const float lfoHz = 0.5f + (val / 10) * 0.833f;
+            v.gatRateRad = kTwoPi * lfoHz / static_cast<float>(mSampleRate);
+            v.gatDepth   = (val % 10) / 9.0f;
+            v.gatPhase   = 0.0f;
+            break;
+        }
+
+        case FX_RET: {
+            // XY: X=vol curve (0-9), Y=retrig count (1-9)
+            const int curve = val / 10;
+            const int count = val % 10;
+            if (count > 0) {
+                v.retCount         = count;
+                v.retPeriodSamples = std::max(1, lineSamples / (count + 1));
+                v.retPhase         = 0;
+                v.retVolCurve      = curve;
+            }
+            break;
+        }
+
+        default: break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// applyContinuationFx — apply FX from a no-note step to the live voice on a
+// track. Lets effects (vibrato, slide, volume, pan, …) start/stop mid-note,
+// matching standard tracker behaviour. Must be called under mVoiceMutex.
+// ---------------------------------------------------------------------------
+void AudioEngine::applyContinuationFx(int trackIdx, int32_t lineSamples,
+                                      int fx0cmd, int fx0val,
+                                      int fx1cmd, int fx1val,
+                                      int fx2cmd, int fx2val) {
+    if (trackIdx < 0 || trackIdx >= kSeqVoices) return;
+    Voice& v = mVoices[trackIdx];
+    // Only modulate a voice that is genuinely sounding — never resurrect a
+    // released/inactive voice.
+    if (!v.isActive || v.isFadingOut) return;
+
+    const int fxCmds[3] = {fx0cmd, fx1cmd, fx2cmd};
+    const int fxVals[3] = {fx0val, fx1val, fx2val};
+    for (int f = 0; f < 3; f++) {
+        // FX_DEL is a note-scheduling effect — meaningless without a note.
+        if (fxCmds[f] == 0 || fxCmds[f] == FX_DEL) continue;
+        applyFxToVoice(v, fxCmds[f], fxVals[f], lineSamples);
     }
 }
 
@@ -617,6 +658,11 @@ void AudioEngine::fireRow(const QueuedRow& row) {
                     triggerNote(lastInstr, midiNote, vol, trackIdx, row.lineSamples,
                                 fx0cmd, fx0val, fx1cmd, fx1val, fx2cmd, fx2val);
                 }
+            } else if (midiNote == -1 && trackIdx < 8) {
+                // FX-only step (no note, no instrument) — apply as continuation FX
+                // to the voice already playing on this track, without re-triggering.
+                applyContinuationFx(trackIdx, row.lineSamples,
+                                    fx0cmd, fx0val, fx1cmd, fx1val, fx2cmd, fx2val);
             }
             continue;
         }
@@ -666,7 +712,12 @@ void AudioEngine::fireRow(const QueuedRow& row) {
                             fx0cmd, fx0val, fx1cmd, fx1val, fx2cmd, fx2val);
             }
         }
-        // midiNote == -1 → hold/no change, skip
+        else if (midiNote == -1) {
+            // Hold step (instrument present, no note) — apply any FX as continuation
+            // FX to the live voice on this track, without re-triggering the note.
+            applyContinuationFx(trackIdx, row.lineSamples,
+                                fx0cmd, fx0val, fx1cmd, fx1val, fx2cmd, fx2val);
+        }
     }
 }
 

@@ -1233,6 +1233,8 @@ class TrackerModel {
           final int semitones = ci.transpose <= 12 ? ci.transpose : ci.transpose - 100;
           midiNote = (midiNote + semitones).clamp(0, 120);
         }
+        // Slice mode: C-0 to B-0 (MIDI 0-11) routes to instruments 1-12 at unity pitch
+        if (midiNote >= 0 && midiNote <= 11) { instrIdx = midiNote; midiNote = 60; }
         final fxIds  = [0, 0, 0];
         final fxVals = [0, 0, 0];
         for (int i = 0; i < ps.fx.length && i < 3; i++) {
@@ -1357,6 +1359,8 @@ class TrackerModel {
             final int semitones = ci.transpose <= 12 ? ci.transpose : ci.transpose - 100;
             midiNote = (midiNote + semitones).clamp(0, 120);
           }
+          // Slice mode: C-0 to B-0 (MIDI 0-11) routes to instruments 1-12 at unity pitch
+          if (midiNote >= 0 && midiNote <= 11) { instrIdx = midiNote; midiNote = 60; }
 
           if (instrIdx >= 0) {
             for (final fx in ps.fx) {
@@ -1519,6 +1523,8 @@ class TrackerModel {
                   : ci.transpose - 100; // 99→-1, 88→-12
               midiNote = (midiNote + semitones).clamp(0, 120);
             }
+            // Slice mode: C-0 to B-0 (MIDI 0-11) routes to instruments 1-12 at unity pitch
+            if (midiNote >= 0 && midiNote <= 11) { instrIdx = midiNote; midiNote = 60; }
 
             // CHA: probabilistic note skip
             if (instrIdx >= 0) {
@@ -1599,9 +1605,12 @@ class TrackerModel {
       final ps = ph.steps[step];
       if (ps.note == PhraseStep.noteEnd) break;
       final int lineSamples = _swingLineSamples(song.bpm, song.lpb, step);
-      final instrIdx = ps.instrument > 0 ? ps.instrument - 1 : -1;
+      int instrIdx = ps.instrument > 0 ? ps.instrument - 1 : -1;
+      int midiNote = ps.note;
+      // Slice mode: C-0 to B-0 (MIDI 0-11) routes to instruments 1-12 at unity pitch
+      if (midiNote >= 0 && midiNote <= 11) { instrIdx = midiNote; midiNote = 60; }
       // Track 0 carries step data (9 ints); tracks 1-7 are silent (9 zeros each)
-      final noteData = <int>[instrIdx, ps.note, ps.volume];
+      final noteData = <int>[instrIdx, midiNote, ps.volume];
       for (final fx in ps.fx) {
         noteData.add(_fxIdForC(fx.name));
         noteData.add(fx.value);

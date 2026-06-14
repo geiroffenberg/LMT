@@ -326,6 +326,14 @@ private:
     // Must be called under mVoiceMutex.
     void applyFxToVoice(Voice& v, int cmd, int val, int32_t lineSamples);
 
+    // Apply FX slots from a no-note (hold / FX-only) step to the voice already
+    // playing on the given track, without re-triggering. No-op if no live voice.
+    // Must be called under mVoiceMutex.
+    void applyContinuationFx(int trackIdx, int32_t lineSamples,
+                             int fx0cmd, int fx0val,
+                             int fx1cmd, int fx1val,
+                             int fx2cmd, int fx2val);
+
     // Audio processing helpers
     float processSample(Voice& voice, const SampleData& sample, float effFrequency);
 
