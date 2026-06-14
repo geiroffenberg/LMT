@@ -302,7 +302,8 @@ Commands marked **P** are Phrase-only; **C** are Chain-only; **B** work in both.
 
 | CMD | Where | Value | Description |
 |---|---|---|---|
-| `PIT` | P | 00–99 | Fine pitch offset (±1 semitone range, 50=centre) |
+| `FIN` | P | 00–99 | Fine pitch offset (±1 semitone range, 50=no change) |
+| `PIT` | P | 00–99 | Semitone transpose (01–49=+1 to +49 semitones, 50=no change, 51–99=−1 to −49 semitones) |
 | `ARP` | P | XY | Arpeggio: X=1st interval (semitones), Y=2nd |
 | `SLU` | P | XY | Slide up: X=lines, Y=semitones |
 | `SLD` | P | XY | Slide down: X=lines, Y=semitones |

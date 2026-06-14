@@ -27,7 +27,8 @@ const Map<String, ({String desc, String value, String windows})> kFxCommands = {
   'SLU': (desc: 'Slide up — X=lines, Y=semitones',          value: 'XY',    windows: 'P'),
   'SLD': (desc: 'Slide down — X=lines, Y=semitones',        value: 'XY',    windows: 'P'),
   'VIB': (desc: 'Vibrato — X=speed, Y=depth',               value: 'XY',    windows: 'P'),
-  'PIT': (desc: 'Fine pitch offset (±1 semitone range)',     value: '00–99', windows: 'P'),
+  'PIT': (desc: 'Pitch transpose — 01–49=up semitones, 51–99=down semitones', value: '00–99', windows: 'P'),
+  'FIN': (desc: 'Fine pitch offset (±1 semitone range)',     value: '00–99', windows: 'P'),
 
   // ── Volume Modulation ────────────────────────────────────────────────────
   'TRE': (desc: 'Tremolo (sine) — X=speed, Y=depth',        value: 'XY',    windows: 'P'),
@@ -78,8 +79,8 @@ const Map<String, ({String desc, String value, String windows})> kFxCommands = {
 const Map<String, int> kFxId = {
   'VOL':  1,  'PAN':  2,  'REV':  3,  'DEL':  4,  'RET':  5,
   'KIL':  6,  'CHA':  7,  'ARP':  8,  'SLU':  9,  'SLD': 10,
-  'VIB': 11,  'PIT': 12,  'TRE': 13,  'GAT': 14,  'SNR': 15,
-  'SND': 16,  'SNC': 17,  'SLC': 18,
+  'VIB': 11,  'FIN': 12,  'TRE': 13,  'GAT': 14,  'SNR': 15,
+  'SND': 16,  'SNC': 17,  'SLC': 18,  'PIT': 19,
 };
 
 /// Map BPM FX value (00–99) to BPM (60–240).

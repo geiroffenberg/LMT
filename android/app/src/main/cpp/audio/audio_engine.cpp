@@ -15,8 +15,8 @@
 // ---------------------------------------------------------------------------
 static constexpr int FX_VOL = 1,  FX_PAN = 2,  FX_REV = 3,  FX_DEL = 4,  FX_RET = 5;
 static constexpr int FX_KIL = 6,  FX_ARP = 8,  FX_SLU = 9,  FX_SLD = 10, FX_VIB = 11;
-static constexpr int FX_PIT = 12, FX_TRE = 13, FX_GAT = 14, FX_SNR = 15;
-static constexpr int FX_SND = 16, FX_SNC = 17;
+static constexpr int FX_FIN = 12, FX_TRE = 13, FX_GAT = 14, FX_SNR = 15;
+static constexpr int FX_SND = 16, FX_SNC = 17, FX_PIT = 19;
 
 // Global audio engine instance (for JNI access)
 static AudioEngine* gAudioEngine = nullptr;
@@ -504,10 +504,18 @@ void AudioEngine::applyFxToVoice(Voice& v, int cmd, int val, int32_t lineSamples
             if (v.kilCountdown < 1) v.kilCountdown = 1;
             break;
 
-        case FX_PIT: {
+        case FX_FIN: {
             // Fine pitch: 00=-1 semitone, 50=0, 99=+1 semitone
             const float cents = (val - 50) * 2.0f;   // -100..+100 cents
             v.frequency  *= std::pow(2.0f, cents / 1200.0f);
+            v.arpBaseFreq = v.frequency;
+            break;
+        }
+
+        case FX_PIT: {
+            // Semitone transpose: 00=0, 01-49=+1 to +49 semitones, 50=0, 51-99=-1 to -49 semitones
+            const int semis = (val < 50) ? val : (50 - val);
+            v.frequency  *= std::pow(2.0f, semis / 12.0f);
             v.arpBaseFreq = v.frequency;
             break;
         }
