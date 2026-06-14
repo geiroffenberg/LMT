@@ -333,6 +333,25 @@ Commands marked **P** are Phrase-only; **C** are Chain-only; **B** work in both.
 | `LPB` | C | 01–16 | Lines per beat override for this phrase |
 | `HOP` | C | 00–99 | Jump to chain row (non-linear arrangement) |
 
+### Slice Player Mode
+
+The bottom octave (MIDI notes 0–11) is reserved as a **slice player**.
+Instead of playing a pitched note, these entries directly trigger instruments
+1–12 at their original pitch:
+
+| Display | Triggers |
+|---|---|
+| `I01` | Instrument 1 |
+| `I02` | Instrument 2 |
+| … | … |
+| `I12` | Instrument 12 |
+
+**Typical workflow:** Chop a breakbeat or sample into pieces, load each piece
+into instruments 1–12, then enter `I01`–`I12` in a phrase to sequence the
+slices. The instrument column is ignored for these entries — the note itself
+selects the instrument. Any FX commands (VOL, PIT, VIB, etc.) still apply
+normally.
+
 ### Slice
 
 | CMD | Where | Value | Description |

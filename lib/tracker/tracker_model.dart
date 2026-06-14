@@ -45,10 +45,12 @@ class PhraseStep {
   List<FxSlot> fx = [FxSlot(), FxSlot(), FxSlot()];
 
   // Helper to get note display (e.g., "C-4", "C#4", "---", "OFF", "END")
+  // MIDI 0-11 display as I01-I12 (slice player mode)
   String getNoteDisplay() {
     if (note == noteEnd)  return 'END';
     if (note == noteOff)  return 'OFF';
     if (note < 0 || note > 120) return '---';
+    if (note <= 11) return 'I${(note + 1).toString().padLeft(2, '0')}';
     const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
     final octave = (note ~/ 12) - 1; // MIDI 60 = C-4 (middle C)
     final semitone = note % 12;
