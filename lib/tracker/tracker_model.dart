@@ -1258,10 +1258,11 @@ class TrackerModel {
 
   // -----------------------------------------------------------------------
   // Build C++ rows for a single phrase (phrase view playback).
+  // trackIdx (0-7) routes audio through the correct mixer channel.
   // -----------------------------------------------------------------------
   ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap})
-      buildPhraseData(int phraseIdx) {
-    final rows = buildPhraseRows(phraseIdx);
+      buildPhraseData(int phraseIdx, {int trackIdx = 0}) {
+    final rows = buildPhraseRows(phraseIdx, trackIdx: trackIdx);
     final n = rows.length;
     return (
       rows: rows,
@@ -1596,7 +1597,7 @@ class TrackerModel {
   // Build C++ rows for a single phrase (Phrase window play).
   // Each step fires its instrument; all other tracks are silent.
   // -----------------------------------------------------------------------
-  List<Map<String, dynamic>> buildPhraseRows(int phraseIdx) {
+  List<Map<String, dynamic>> buildPhraseRows(int phraseIdx, {int trackIdx = 0}) {
     final ph  = phrases[phraseIdx];
     final len = _getPhraseLen(ph);
     if (len == 0) return [];
@@ -1611,14 +1612,21 @@ class TrackerModel {
       int midiNote = ps.note;
       // Slice mode: C-0 to B-0 (MIDI 0-11) routes to instruments 1-12 at unity pitch
       if (midiNote >= 0 && midiNote <= 11) { instrIdx = midiNote; midiNote = 60; }
-      // Track 0 carries step data (9 ints); tracks 1-7 are silent (9 zeros each)
-      final noteData = <int>[instrIdx, midiNote, ps.volume];
-      for (final fx in ps.fx) {
-        noteData.add(_fxIdForC(fx.name));
-        noteData.add(fx.value);
-      }
-      for (int t = 1; t < 8; t++) {
-        noteData.addAll([-1, -1, -1, 0, 0, 0, 0, 0, 0]);
+      // Route through the correct mixer channel: fill silent slots before and
+      // after trackIdx so the phrase uses the same channel as in song/chain view.
+      final noteData = <int>[];
+      for (int t = 0; t < 8; t++) {
+        if (t == trackIdx) {
+          noteData.addAll([instrIdx, midiNote, ps.volume]);
+          for (final fx in ps.fx) {
+            noteData.add(_fxIdForC(fx.name));
+            noteData.add(fx.value);
+          }
+          // Pad to 9 ints if fewer than 3 FX slots used
+          while (noteData.length < (t + 1) * 9) noteData.add(0);
+        } else {
+          noteData.addAll([-1, -1, -1, 0, 0, 0, 0, 0, 0]);
+        }
       }
       rows.add({'lineSamples': lineSamples, 'noteData': noteData});
     }

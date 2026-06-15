@@ -309,7 +309,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
 
       if (_playbackWindow == 2) {
         // Phrase view: play this phrase solo, looping from step 0.
-        data = model.buildPhraseData(model.activePhraseIdx);
+        // Use _songCursorCol so the phrase routes through the correct mixer
+        // channel (the track it belongs to in song view), preserving
+        // reverb/delay/chorus sends and volume settings for that track.
+        data = model.buildPhraseData(model.activePhraseIdx, trackIdx: _songCursorCol);
       } else if (_playbackWindow == 1) {
         // Chain view: find the song row containing this chain, then build just
         // that one row (all 8 tracks, all chain slots, shorter chains loop).
