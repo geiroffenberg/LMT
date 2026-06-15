@@ -41,6 +41,7 @@ class _ManualDialogState extends State<_ManualDialog> {
     _Section('FX: CHAIN',     _fxChain),
     _Section('FX: SAMPLER',   _fxSampler),
     _Section('FX: MIXER',     _fxMixer),
+    _Section('INTERPOLATION', _interpolation),
     _Section('WORKFLOW TIPS', _tips),
   ];
 
@@ -210,11 +211,6 @@ class _ManualContent extends StatelessWidget {
         );
       case _BT.table:
         return _buildTable(b);
-      case _BT.divider:
-        return const Padding(
-          padding: EdgeInsets.symmetric(vertical: 6),
-          child: Divider(color: Colors.white24, thickness: 1),
-        );
     }
   }
 
@@ -257,7 +253,7 @@ class _ManualContent extends StatelessWidget {
 
 // ── Data types ────────────────────────────────────────────────────────────
 
-enum _BT { h1, h2, body, table, divider }
+enum _BT { h1, h2, body, table }
 
 class _Block {
   const _Block.h1(this.text)
@@ -272,10 +268,6 @@ class _Block {
   const _Block.table(this.rows)
       : type = _BT.table,
         text = '';
-  const _Block.divider()
-      : type = _BT.divider,
-        text = '',
-        rows = const [];
 
   final _BT            type;
   final String         text;
@@ -440,7 +432,7 @@ const _instrument = [
     ['CHO', 'Chorus send'],
   ]),
   _Block.h2('Chop / Crop'),
-  _Block.body('CHOP — divide the sample into equal slices (use SLC FX to select per step).'),
+  _Block.body('CHOP — divide the sample into equal slices.'),
   _Block.body('CROP — trim to current START/END and save in-place.'),
   _Block.body('Tap the play button to audition the sample with current parameters.'),
 ];
@@ -553,31 +545,48 @@ const _fxChain = [
     ['LPB', 'C', '01-16', 'Lines per beat override for this phrase'],
     ['HOP', 'C', '00-99', 'Jump to chain row (non-linear arrangement)'],
   ]),
-  _Block.divider(),
-  _Block.h1('FX: Slice'),
-  _Block.table([
-    ['CMD', 'Where', 'Value',  'Description'],
-    ['SLC', 'P', '00-09', 'Select slice 0-9 from the Chop grid'],
-  ]),
 ];
 
 const _fxSampler = [
-  _Block.h1('FX: Sampler Automation (S01-S11)'),
-  _Block.body('Override per-instrument sampler parameters for a single note.'),
+  _Block.h1('FX: Sampler Automation'),
+  _Block.body('Override per-instrument sampler parameters for a single note. '
+      'Use on consecutive rows to sweep (e.g. LPF for a filter sweep).'),
   _Block.table([
     ['CMD', 'Value',  'Description'],
-    ['S01', '00-99', 'Sample start point'],
-    ['S02', '00-99', 'Sample end point'],
-    ['S03', '00-99', 'Pitch / tune'],
-    ['S04', '00-99', 'Volume'],
-    ['S05', '00-99', 'Attack'],
-    ['S06', '00-99', 'Release'],
-    ['S07', '00-01', 'Loop: 01=on  00=off'],
-    ['S08', '00-99', 'Loop start point'],
-    ['S09', '00-99', 'Loop end point'],
-    ['S10', '00-99', 'Filter cutoff'],
-    ['S11', '00-99', 'Filter resonance'],
+    ['SST', '00-99', 'Sample start point'],
+    ['SEN', '00-99', 'Sample end point'],
+    ['ATK', '00-99', 'Attack (00=fast, 99=slow)'],
+    ['REL', '00-99', 'Release (00=short, 99=long)'],
+    ['LPF', '00-99', 'Low-pass cutoff (99=open, 00=closed)'],
+    ['HPF', '00-99', 'High-pass cutoff (00=open, 99=closed)'],
+    ['RES', '00-99', 'Filter resonance (shared HP/LP)'],
+    ['LOP', '00-01', 'Loop: 01=on  00=off'],
   ]),
+];
+
+const _interpolation = [
+  _Block.h1('FX Interpolation (INT)'),
+  _Block.body(
+    'Fill a range of FX values automatically with a smooth linear sweep '
+    'between two anchor rows.'
+  ),
+  _Block.h2('How to use'),
+  _Block.table([
+    ['Step', 'Action'],
+    ['1', 'Write an FX command+value on a row  (e.g. LPF 10)'],
+    ['2', 'Write the same FX command on a lower row with a different value (e.g. LPF 80)'],
+    ['3', 'Double-tap the lower value cell to open the edit menu'],
+    ['4', 'Tap INT — all rows between the two anchors are filled automatically'],
+  ]),
+  _Block.body(
+    'Both anchor rows keep their original values. '
+    'Run INT twice on two separate segments to make envelope shapes '
+    '(e.g. attack sweep up, then decay sweep down).'
+  ),
+  _Block.body(
+    'INT only appears when the cursor is on an FX value cell and '
+    'the same FX command exists at least 2 rows above in the same column.'
+  ),
 ];
 
 const _fxMixer = [

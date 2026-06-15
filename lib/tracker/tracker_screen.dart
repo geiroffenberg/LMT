@@ -1738,10 +1738,14 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
 
   Widget _buildBottomEditMenu() {
     // ── Line-selection mode: single row of actions ──
+    // 48 = transport bar height (36px buttons + 6px vertical padding × 2).
+    // All menus sit above the bar so PLAY/LOOP/undo/☰ stay reachable.
+    const double kTransportBarH = 48.0;
+
     if (model.hasLineSelection) {
       final items = ['↑', '↓', '2x', 'DEL', 'X'];
       return Positioned(
-        bottom: 0,
+        bottom: kTransportBarH,
         left: 0,
         right: 0,
         child: LayoutBuilder(
@@ -1803,10 +1807,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         ? ['−', '+', '−12', '+12']
         : ['−', '+', '−10', '+10'];
 
-    // Song window: REP + DEL
-    // Chain window PH column with data: REP + DEL + X
+    // Song window: CLO + DEL + X
+    // Chain window PH column with data: CLO + DEL + X
     // Phrase note column: OFF + END + DEL + X
-    // Phrase other columns: CPY + CUT + PST + DEL + X
+    // All other phrase columns: DEL + X
     // Chain / Instrument / Mixer: just DEL + X (+/- in line 1 is enough)
     final isChainPhCol = model.currentWindow == 1 && model.cursorCol == 0 &&
         model.chains[model.activeChainIdx].items[model.cursorRow].phrase > 0;
@@ -1817,11 +1821,11 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
             : model.currentWindow == 2
                 ? (isNoteColumn
                     ? ['OFF', 'END', 'DEL', 'X']
-                    : ['CPY', 'CUT', 'PST', 'DEL', 'X'])
+                    : (model.canInterpolateFx ? ['INT', 'DEL', 'X'] : ['DEL', 'X']))
                 : ['DEL', 'X'];
 
     return Positioned(
-      bottom: 0,
+      bottom: kTransportBarH,
       left: 0,
       right: 0,
       child: LayoutBuilder(

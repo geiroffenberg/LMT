@@ -358,23 +358,21 @@ normally.
 |---|---|---|---|
 | `SLC` | P | 00–09 | Select slice (0–9 from the Chop grid) |
 
-### Sampler Automation (S01–S11)
+### Sampler Automation
 
-Override per-instrument sampler parameters for a single note.
+Override per-instrument sampler parameters for a single note. Place on
+consecutive rows to sweep a value (e.g. `LPF` for a filter sweep).
 
 | CMD | Value | Description |
 |---|---|---|
-| `S01` | 00–99 | Sample start point |
-| `S02` | 00–99 | Sample end point |
-| `S03` | 00–99 | Pitch / tune |
-| `S04` | 00–99 | Volume |
-| `S05` | 00–99 | Attack |
-| `S06` | 00–99 | Release |
-| `S07` | 00–01 | Loop on (01) / off (00) |
-| `S08` | 00–99 | Loop start point |
-| `S09` | 00–99 | Loop end point |
-| `S10` | 00–99 | Filter cutoff |
-| `S11` | 00–99 | Filter resonance |
+| `SST` | 00–99 | Sample start point |
+| `SEN` | 00–99 | Sample end point |
+| `ATK` | 00–99 | Attack (00=fast, 99=slow) |
+| `REL` | 00–99 | Release (00=short, 99=long) |
+| `LPF` | 00–99 | Low-pass cutoff (99=open, 00=closed) |
+| `HPF` | 00–99 | High-pass cutoff (00=open, 99=closed) |
+| `RES` | 00–99 | Filter resonance (shared HP/LP) |
+| `LOP` | 00–01 | Loop on (01) / off (00) |
 
 ### Mixer Automation (Mxy)
 

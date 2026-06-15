@@ -17,6 +17,9 @@ static constexpr int FX_VOL = 1,  FX_PAN = 2,  FX_REV = 3,  FX_DEL = 4,  FX_RET 
 static constexpr int FX_KIL = 6,  FX_ARP = 8,  FX_SLU = 9,  FX_SLD = 10, FX_VIB = 11;
 static constexpr int FX_FIN = 12, FX_TRE = 13, FX_GAT = 14, FX_SNR = 15;
 static constexpr int FX_SND = 16, FX_SNC = 17, FX_PIT = 19;
+// Sampler automation
+static constexpr int FX_SST = 20, FX_SEN = 21, FX_ATK = 22, FX_REL = 23;
+static constexpr int FX_LPF = 24, FX_HPF = 25, FX_RES = 26, FX_LOP = 27;
 
 // Global audio engine instance (for JNI access)
 static AudioEngine* gAudioEngine = nullptr;
@@ -199,6 +202,7 @@ void AudioEngine::noteOn(int instrumentIdx, float frequencyHz, float level) {
     // Per-instrument filters (reset biquad state on new note)
     voice.hpCutoff = mInstrumentHpCutoff[instrumentIdx].load(std::memory_order_relaxed);
     voice.lpCutoff = mInstrumentLpCutoff[instrumentIdx].load(std::memory_order_relaxed);
+    voice.resonance = 0.0f;
     voice.hpS1 = 0.0f; voice.hpS2 = 0.0f;
     voice.lpS1 = 0.0f; voice.lpS2 = 0.0f;
 }
@@ -236,6 +240,7 @@ void AudioEngine::noteOnRegion(int instrumentIdx, float frequencyHz, float level
     // Reset biquad filter state on new note trigger
     voice.hpCutoff = mInstrumentHpCutoff[instrumentIdx].load(std::memory_order_relaxed);
     voice.lpCutoff = mInstrumentLpCutoff[instrumentIdx].load(std::memory_order_relaxed);
+    voice.resonance = 0.0f;
     voice.hpS1 = 0.0f; voice.hpS2 = 0.0f;
     voice.lpS1 = 0.0f; voice.lpS2 = 0.0f;
 
@@ -445,6 +450,7 @@ void AudioEngine::triggerNote(int instrIdx, int midiNote, int vol, int trackIdx,
     v.trackIdx         = trackIdx;
     v.hpCutoff         = mInstrumentHpCutoff[instrIdx].load(std::memory_order_relaxed);
     v.lpCutoff         = mInstrumentLpCutoff[instrIdx].load(std::memory_order_relaxed);
+    v.resonance        = 0.0f;
     v.hpS1 = v.hpS2 = v.lpS1 = v.lpS2 = 0.0f;
     const float rt     = std::max(releaseSec, 0.001f);
     v.releaseSamples   = static_cast<int32_t>(rt * mSampleRate);
@@ -591,6 +597,65 @@ void AudioEngine::applyFxToVoice(Voice& v, int cmd, int val, int32_t lineSamples
             }
             break;
         }
+
+        // ── Sampler automation ────────────────────────────────────────────
+        case FX_SST: {
+            // Sample start point (0..99 → 0..1 of sample length)
+            if (v.instrumentIdx >= 0 && v.instrumentIdx < kMaxInstruments) {
+                const int32_t numFrames = mSamples[v.instrumentIdx].numFrames;
+                const double sf = (val / 99.0) * static_cast<double>(numFrames);
+                v.startFrame     = sf;
+                v.samplePosition = sf;
+            }
+            break;
+        }
+
+        case FX_SEN: {
+            // Sample end point (0..99 → 0..1 of sample length)
+            if (v.instrumentIdx >= 0 && v.instrumentIdx < kMaxInstruments) {
+                const int32_t numFrames = mSamples[v.instrumentIdx].numFrames;
+                const double ef = (val / 99.0) * static_cast<double>(numFrames);
+                if (ef > v.startFrame) v.endFrame = ef;
+            }
+            break;
+        }
+
+        case FX_ATK: {
+            // Attack 0..99 → 0..500ms (matches sampler UI's ×0.5 scale)
+            const float sec = (val / 99.0f) * 0.5f;
+            v.attackSamples  = static_cast<int32_t>(sec * mSampleRate);
+            v.elapsedSamples = 0;
+            v.envLevel       = (v.attackSamples > 0) ? 0.0f : 1.0f;
+            break;
+        }
+
+        case FX_REL: {
+            // Release 0..99 → 1ms..500ms (matches sampler UI's ×0.5 scale)
+            const float sec = std::max((val / 99.0f) * 0.5f, 0.001f);
+            v.releaseSamples = static_cast<int32_t>(sec * mSampleRate);
+            v.releaseK       = 1.0f - std::exp(-1.0f / (mSampleRate * sec));
+            break;
+        }
+
+        case FX_LPF:
+            // Low-pass cutoff: 99=fully open (1.0), 00=fully closed (0.0)
+            v.lpCutoff = val / 99.0f;
+            break;
+
+        case FX_HPF:
+            // High-pass cutoff: 00=open (0.0 bypass), 99=fully closed (1.0)
+            v.hpCutoff = val / 99.0f;
+            break;
+
+        case FX_RES:
+            // Shared HP/LP resonance (0..1)
+            v.resonance = val / 99.0f;
+            break;
+
+        case FX_LOP:
+            // Loop on/off: 0=off, >=1=loop
+            v.loopMode = (val >= 1) ? 1 : 0;
+            break;
 
         default: break;
     }
@@ -880,17 +945,17 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         // Precompute HP/LP Chamberlin SVF coefficients (log-scale freq mapping)
         // HP: hpCutoff 0=bypass (20Hz), 1=max cut (20kHz)
         // LP: lpCutoff 1=bypass (20kHz), 0=max cut (20Hz)
-        // Read atomically — filter params can be updated from UI thread without locking.
-        // NOTE: index by voice.instrumentIdx, NOT v.  v is the voice slot (== trackIdx
-        // for sequencer notes via triggerNote, == instrumentIdx for preview via noteOnRegion).
-        // Using v here caused phrase playback to read the wrong instrument's filter.
-        const float hpCutoff = mInstrumentHpCutoff[voice.instrumentIdx].load(std::memory_order_relaxed);
-        const float lpCutoff = mInstrumentLpCutoff[voice.instrumentIdx].load(std::memory_order_relaxed);
+        // Read per-voice fields (seeded from the instrument at note-on, then
+        // modulated by LPF/HPF/RES sampler-automation FX). This lets a phrase
+        // sweep the filter mid-note while static instrument settings still apply.
+        const float hpCutoff = voice.hpCutoff;
+        const float lpCutoff = voice.lpCutoff;
         const bool doHp = hpCutoff > 0.001f;
         const bool doLp = lpCutoff < 0.999f;
-        // Audio EQ Cookbook biquad LP/HP — Butterworth Q = 1/√2.
-        // Computed once per buffer outside the hot loop; unconditionally stable at any frequency.
-        static constexpr float kBqQ = 0.7071f;
+        // Audio EQ Cookbook biquad LP/HP. Q rises with the shared RES control:
+        // 0 → Butterworth (0.707, flat), 1 → sharp resonant peak (~8.0).
+        // Computed once per buffer outside the hot loop; stable at any frequency.
+        const float kBqQ = 0.7071f + voice.resonance * 7.3f;
         float hp_b0=0, hp_b1=0, hp_b2=0, hp_a1=0, hp_a2=0;
         float lp_b0=0, lp_b1=0, lp_b2=0, lp_a1=0, lp_a2=0;
         if (doHp) {

@@ -39,27 +39,21 @@ const Map<String, ({String desc, String value, String windows})> kFxCommands = {
   'SND': (desc: 'Send to Delay',                             value: '00–99', windows: 'B'),
   'SNC': (desc: 'Send to Chorus',                            value: '00–99', windows: 'B'),
 
-  // ── Slice ────────────────────────────────────────────────────────────────
-  'SLC': (desc: 'Select slice (0–9)',                        value: '00–09', windows: 'P'),
-
   // ── Chain-only ───────────────────────────────────────────────────────────
   'BPM': (desc: 'Tempo change (maps to 60–240 BPM)',         value: '00–99', windows: 'B'),
   'TPO': (desc: 'Transpose phrase (00=−12, 50=0, 99=+12)',   value: '00–99', windows: 'C'),
   'LPB': (desc: 'Lines per beat override for this phrase',   value: '01–16', windows: 'C'),
   'HOP': (desc: 'Jump to chain row (non-linear arrangement)',value: '00–99', windows: 'C'),
 
-  // ── Sampler Automation (S01–S11) ─────────────────────────────────────────
-  'S01': (desc: 'Sampler: sample start point',               value: '00–99', windows: 'B'),
-  'S02': (desc: 'Sampler: sample end point',                 value: '00–99', windows: 'B'),
-  'S03': (desc: 'Sampler: pitch / tune',                     value: '00–99', windows: 'B'),
-  'S04': (desc: 'Sampler: volume',                           value: '00–99', windows: 'B'),
-  'S05': (desc: 'Sampler: attack',                           value: '00–99', windows: 'B'),
-  'S06': (desc: 'Sampler: release',                          value: '00–99', windows: 'B'),
-  'S07': (desc: 'Sampler: loop on/off',                      value: '00–01', windows: 'B'),
-  'S08': (desc: 'Sampler: loop start point',                 value: '00–99', windows: 'B'),
-  'S09': (desc: 'Sampler: loop end point',                   value: '00–99', windows: 'B'),
-  'S10': (desc: 'Sampler: filter cutoff',                    value: '00–99', windows: 'B'),
-  'S11': (desc: 'Sampler: filter resonance',                 value: '00–99', windows: 'B'),
+  // ── Sampler Automation ───────────────────────────────────────────────────
+  'SST': (desc: 'Sampler: sample start point',               value: '00–99', windows: 'P'),
+  'SEN': (desc: 'Sampler: sample end point',                 value: '00–99', windows: 'P'),
+  'ATK': (desc: 'Sampler: attack (00=fast, 99=slow)',        value: '00–99', windows: 'P'),
+  'REL': (desc: 'Sampler: release (00=short, 99=long)',      value: '00–99', windows: 'P'),
+  'LPF': (desc: 'Sampler: low-pass cutoff (99=open, 00=closed)',  value: '00–99', windows: 'P'),
+  'HPF': (desc: 'Sampler: high-pass cutoff (00=open, 99=closed)', value: '00–99', windows: 'P'),
+  'RES': (desc: 'Sampler: filter resonance (shared HP/LP)',  value: '00–99', windows: 'P'),
+  'LOP': (desc: 'Sampler: loop on/off',                      value: '00–01', windows: 'P'),
 
   // ── Mixer Automation (Mxy — X=channel 1–8, Y=param 1–8) ─────────────────
   // Channel param Y values:
@@ -80,7 +74,10 @@ const Map<String, int> kFxId = {
   'VOL':  1,  'PAN':  2,  'REV':  3,  'DEL':  4,  'RET':  5,
   'KIL':  6,  'CHA':  7,  'ARP':  8,  'SLU':  9,  'SLD': 10,
   'VIB': 11,  'FIN': 12,  'TRE': 13,  'GAT': 14,  'SNR': 15,
-  'SND': 16,  'SNC': 17,  'SLC': 18,  'PIT': 19,
+  'SND': 16,  'SNC': 17,  'PIT': 19,
+  // Sampler automation
+  'SST': 20,  'SEN': 21,  'ATK': 22,  'REL': 23,  'LPF': 24,
+  'HPF': 25,  'RES': 26,  'LOP': 27,
 };
 
 /// Map BPM FX value (00–99) to BPM (60–240).

@@ -101,6 +101,20 @@ void main() async {
     }
   }
 
+  // Push mixer levels + sends so they're active before the first note plays.
+  // Without this the C++ engine starts with defaults (level=1.0, sends=0)
+  // and ignores saved mixer settings until the user touches a mixer knob.
+  for (int i = 0; i < model.mixerChannels.length; i++) {
+    final ch = model.mixerChannels[i];
+    NativeAudioEngine.setTrackLevel(i, ch.level / 99.0);
+    NativeAudioEngine.setTrackSends(
+      i,
+      ch.reverbSend / 99.0,
+      ch.delaySend  / 99.0,
+      ch.chorusSend / 99.0,
+    );
+  }
+
   runApp(LMTApp(initialModel: model));
 }
 

@@ -977,6 +977,22 @@ class TrackerModel {
         // Phrase note column: empty = noteNone (-1), not MIDI note 0
         phrases[activePhraseIdx].steps[cursorRow].note = PhraseStep.noteNone;
         exitEditMode();
+      } else if (currentWindow == 1 && cursorCol >= 2 && (cursorCol - 2) % 2 == 0) {
+        // Chain FX name column (col 2 or 4): reset to '---' + clear value
+        final fxIndex = (cursorCol - 2) ~/ 2;
+        if (fxIndex < chains[activeChainIdx].items[cursorRow].fx.length) {
+          chains[activeChainIdx].items[cursorRow].fx[fxIndex].name  = '---';
+          chains[activeChainIdx].items[cursorRow].fx[fxIndex].value = 0;
+        }
+        exitEditMode();
+      } else if (currentWindow == 2 && cursorCol >= 3 && (cursorCol - 3) % 2 == 0) {
+        // Phrase FX name column (col 3 or 5): reset to '---' + clear value
+        final fxIndex = (cursorCol - 3) ~/ 2;
+        if (fxIndex < phrases[activePhraseIdx].steps[cursorRow].fx.length) {
+          phrases[activePhraseIdx].steps[cursorRow].fx[fxIndex].name  = '---';
+          phrases[activePhraseIdx].steps[cursorRow].fx[fxIndex].value = 0;
+        }
+        exitEditMode();
       } else {
         applyEdit('0');
       }
@@ -1003,6 +1019,60 @@ class TrackerModel {
       if (currentWindow == 2 && cursorCol == 0) {
         phrases[activePhraseIdx].steps[cursorRow].note = PhraseStep.noteEnd;
       }
+    } else if (action == 'INT') {
+      interpolatePhraseFx();
+    }
+  }
+
+  // Returns the FX slot index if cursor is on a phrase FX value column, else -1.
+  // Phrase layout: col 3=FX0 name, 4=FX0 val, 5=FX1 name, 6=FX1 val, 7=FX2 name, 8=FX2 val.
+  int get _phraseFxSlotAtCursor {
+    if (currentWindow != 2) return -1;
+    if (cursorCol < 4) return -1;
+    if ((cursorCol - 3) % 2 != 1) return -1;
+    return (cursorCol - 3) ~/ 2;
+  }
+
+  // True when INT is available: cursor on a phrase FX value cell with a non-empty
+  // command, and the same command exists at least 2 rows above in the same slot.
+  bool get canInterpolateFx {
+    final slot = _phraseFxSlotAtCursor;
+    if (slot < 0) return false;
+    final ph = phrases[activePhraseIdx];
+    if (slot >= ph.steps[cursorRow].fx.length) return false;
+    final targetName = ph.steps[cursorRow].fx[slot].name;
+    if (targetName == '---') return false;
+    for (int r = cursorRow - 2; r >= 0; r--) {
+      if (slot >= ph.steps[r].fx.length) continue;
+      if (ph.steps[r].fx[slot].name == targetName) return true;
+    }
+    return false;
+  }
+
+  // Linearly fills FX values in the same slot between the nearest matching anchor
+  // above the cursor and the cursor row. Both anchor rows are left unchanged.
+  void interpolatePhraseFx() {
+    final slot = _phraseFxSlotAtCursor;
+    if (slot < 0) return;
+    final ph = phrases[activePhraseIdx];
+    if (slot >= ph.steps[cursorRow].fx.length) return;
+    final targetName = ph.steps[cursorRow].fx[slot].name;
+    if (targetName == '---') return;
+    final endRow = cursorRow;
+    final endVal = ph.steps[endRow].fx[slot].value;
+    int startRow = -1;
+    for (int r = endRow - 2; r >= 0; r--) {
+      if (slot >= ph.steps[r].fx.length) continue;
+      if (ph.steps[r].fx[slot].name == targetName) { startRow = r; break; }
+    }
+    if (startRow < 0) return;
+    final startVal = ph.steps[startRow].fx[slot].value;
+    final span = endRow - startRow;
+    for (int r = startRow + 1; r < endRow; r++) {
+      final t = (r - startRow) / span;
+      final v = (startVal + (endVal - startVal) * t).round().clamp(0, 99);
+      ph.steps[r].fx[slot].name  = targetName;
+      ph.steps[r].fx[slot].value = v;
     }
   }
 
@@ -1623,7 +1693,9 @@ class TrackerModel {
             noteData.add(fx.value);
           }
           // Pad to 9 ints if fewer than 3 FX slots used
-          while (noteData.length < (t + 1) * 9) noteData.add(0);
+          while (noteData.length < (t + 1) * 9) {
+            noteData.add(0);
+          }
         } else {
           noteData.addAll([-1, -1, -1, 0, 0, 0, 0, 0, 0]);
         }

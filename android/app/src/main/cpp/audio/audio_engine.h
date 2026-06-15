@@ -56,6 +56,7 @@ struct Voice {
     // Per-instrument HP/LP Chamberlin SVF
     float hpCutoff = 0.0f;         // 0..1 norm (0 = bypass)
     float lpCutoff = 1.0f;         // 0..1 norm (1 = bypass)
+    float resonance = 0.0f;        // 0..1 norm shared HP/LP Q (0 = Butterworth)
     // Per-voice biquad filter state (Direct Form II Transposed, mono)
     float hpS1 = 0.0f, hpS2 = 0.0f;  // HP biquad delay elements
     float lpS1 = 0.0f, lpS2 = 0.0f;  // LP biquad delay elements
