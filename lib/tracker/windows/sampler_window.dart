@@ -57,6 +57,7 @@ class _SamplerWindowState extends State<SamplerWindow> {
     NativeAudioEngine.setInstrumentFilters(
         instrumentIdx, sampler.hpCutoff, sampler.lpCutoff);
     _pushPlaybackParams();
+    _pushLayerParams();
   }
 
   Future<void> _loadWaveformPeaks() async {
@@ -104,6 +105,17 @@ class _SamplerWindowState extends State<SamplerWindow> {
       sampler.attack * 0.5,   // 0..1 → 0..500ms (same conversion as preview)
       sampler.release * 0.5,  // 0..1 → 0..500ms
       sampler.loopMode,
+    );
+  }
+
+  /// Push chord/unison layer 2+3 params (gain 0 = layer off).
+  void _pushLayerParams() {
+    NativeAudioEngine.setInstrumentLayers(
+      instrumentIdx,
+      sampler.layer2PitchCents,
+      sampler.layer2Gain,
+      sampler.layer3PitchCents,
+      sampler.layer3Gain,
     );
   }
 
@@ -1302,6 +1314,74 @@ class _SamplerWindowState extends State<SamplerWindow> {
                     ts,
                   ),
 
+                  // Chord/unison layers — extra voices of THIS sample, summed
+                  // with the main voice. Gain 0 = layer off.
+                  SizedBox(height: _rowH * 0.5),
+
+                  // Row 14: L2 PITCH (Layer 2 pitch offset, ±1200 cents)
+                  _buildParamRow(
+                    'L2 PIT',
+                    sampler.layer2PitchCents,
+                    (newVal) {
+                      sampler.layer2PitchCents = newVal;
+                      _pushLayerParams();
+                    },
+                    sampler.getLayer2PitchDisplay(),
+                    'c',
+                    -1200.0,
+                    1200.0,
+                    fontSize,
+                    ts,
+                  ),
+
+                  // Row 15: L2 GAIN (Layer 2 gain — 0 = off)
+                  _buildParamRow(
+                    'L2 GN',
+                    sampler.layer2Gain,
+                    (newVal) {
+                      sampler.layer2Gain = newVal;
+                      _pushLayerParams();
+                    },
+                    sampler.getLayer2GainDisplay(),
+                    '%',
+                    0.0,
+                    1.0,
+                    fontSize,
+                    ts,
+                  ),
+
+                  // Row 16: L3 PITCH (Layer 3 pitch offset, ±1200 cents)
+                  _buildParamRow(
+                    'L3 PIT',
+                    sampler.layer3PitchCents,
+                    (newVal) {
+                      sampler.layer3PitchCents = newVal;
+                      _pushLayerParams();
+                    },
+                    sampler.getLayer3PitchDisplay(),
+                    'c',
+                    -1200.0,
+                    1200.0,
+                    fontSize,
+                    ts,
+                  ),
+
+                  // Row 17: L3 GAIN (Layer 3 gain — 0 = off)
+                  _buildParamRow(
+                    'L3 GN',
+                    sampler.layer3Gain,
+                    (newVal) {
+                      sampler.layer3Gain = newVal;
+                      _pushLayerParams();
+                    },
+                    sampler.getLayer3GainDisplay(),
+                    '%',
+                    0.0,
+                    1.0,
+                    fontSize,
+                    ts,
+                  ),
+
             // Copy to new instrument button
             SizedBox(height: _rowH),
             GestureDetector(
@@ -1341,6 +1421,13 @@ class _SamplerWindowState extends State<SamplerWindow> {
                   freeSlot,
                   dst.sampler.hpCutoff,
                   dst.sampler.lpCutoff,
+                );
+                await NativeAudioEngine.setInstrumentLayers(
+                  freeSlot,
+                  dst.sampler.layer2PitchCents,
+                  dst.sampler.layer2Gain,
+                  dst.sampler.layer3PitchCents,
+                  dst.sampler.layer3Gain,
                 );
                 onStateChange();
                 if (!mounted) return;
@@ -1397,7 +1484,7 @@ class _SamplerWindowState extends State<SamplerWindow> {
             child: GestureDetector(
               onHorizontalDragUpdate: (details) {
                 final width = MediaQuery.of(context).size.width - 80;
-                final newValue = value + (details.delta.dx / width);
+                final newValue = value + (details.delta.dx / width) * (max - min);
                 onChanged(newValue.clamp(min, max));
                 setState(() {});
               },

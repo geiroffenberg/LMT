@@ -29,6 +29,8 @@ const Map<String, ({String desc, String value, String windows})> kFxCommands = {
   'VIB': (desc: 'Vibrato — X=speed, Y=depth',               value: 'XY',    windows: 'P'),
   'PIT': (desc: 'Pitch transpose — 01–49=up semitones, 51–99=down semitones', value: '00–99', windows: 'P'),
   'FIN': (desc: 'Fine pitch offset (±1 semitone range)',     value: '00–99', windows: 'P'),
+  'PI2': (desc: 'Layer2 pitch — added to its instrument setting, 01–49=up, 51–99=down', value: '00–99', windows: 'P'),
+  'PI3': (desc: 'Layer3 pitch — added to its instrument setting, 01–49=up, 51–99=down', value: '00–99', windows: 'P'),
 
   // ── Volume Modulation ────────────────────────────────────────────────────
   'TRE': (desc: 'Tremolo (sine) — X=speed, Y=depth',        value: 'XY',    windows: 'P'),
@@ -78,6 +80,8 @@ const Map<String, int> kFxId = {
   // Sampler automation
   'SST': 20,  'SEN': 21,  'ATK': 22,  'REL': 23,  'LPF': 24,
   'HPF': 25,  'RES': 26,  'LOP': 27,
+  // Chord/unison layer pitch overrides
+  'PI2': 28,  'PI3': 29,
 };
 
 /// Map BPM FX value (00–99) to BPM (60–240).

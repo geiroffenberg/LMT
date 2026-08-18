@@ -128,6 +128,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       );
       // Engine resets on init — restore HP/LP filters too.
       await NativeAudioEngine.setInstrumentFilters(i, s.hpCutoff, s.lpCutoff);
+      // Restore chord/unison layer 2+3 params too.
+      await NativeAudioEngine.setInstrumentLayers(
+        i, s.layer2PitchCents, s.layer2Gain, s.layer3PitchCents, s.layer3Gain,
+      );
     }
     // Push current mixer + mute + master FX state to the engine.
     _syncMixerSendsToNative();

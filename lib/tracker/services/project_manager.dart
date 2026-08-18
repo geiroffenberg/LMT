@@ -498,6 +498,10 @@ class ProjectManager {
       'revSend': sampler.revSend,
       'lpCutoff': sampler.lpCutoff,
       'hpCutoff': sampler.hpCutoff,
+      'layer2PitchCents': sampler.layer2PitchCents,
+      'layer2Gain': sampler.layer2Gain,
+      'layer3PitchCents': sampler.layer3PitchCents,
+      'layer3Gain': sampler.layer3Gain,
     };
   }
 
@@ -539,6 +543,10 @@ class ProjectManager {
     sampler.revSend = (json['revSend'] as num?)?.toDouble() ?? 0.0;
     sampler.lpCutoff = (json['lpCutoff'] as num?)?.toDouble() ?? 1.0;
     sampler.hpCutoff = (json['hpCutoff'] as num?)?.toDouble() ?? 0.0;
+    sampler.layer2PitchCents = (json['layer2PitchCents'] as num?)?.toDouble() ?? 0.0;
+    sampler.layer2Gain = (json['layer2Gain'] as num?)?.toDouble() ?? 0.0;
+    sampler.layer3PitchCents = (json['layer3PitchCents'] as num?)?.toDouble() ?? 0.0;
+    sampler.layer3Gain = (json['layer3Gain'] as num?)?.toDouble() ?? 0.0;
     
     return sampler;
   }

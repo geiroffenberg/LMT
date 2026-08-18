@@ -87,6 +87,10 @@ void main() async {
     // Push HP/LP filters too so phrase playback is filtered without
     // needing to open the sampler window first.
     await NativeAudioEngine.setInstrumentFilters(i, s.hpCutoff, s.lpCutoff);
+    // Push chord/unison layer 2+3 params (gain 0 = layer off).
+    await NativeAudioEngine.setInstrumentLayers(
+      i, s.layer2PitchCents, s.layer2Gain, s.layer3PitchCents, s.layer3Gain,
+    );
     // Restore time-stretch if it was active — the raw WAV was just loaded so
     // the DSP must be re-applied (native engine resets on every app start).
     if (samplePath.isNotEmpty && s.stretchEnabled) {

@@ -211,6 +211,15 @@ class AudioEnginePlugin(private val context: Context) {
                     nativeSetInstrumentPlaybackParams(nativeHandle, instrIdx, pitch, volume, startNorm, endNorm, attackSec, releaseSec, loopMode)
                     result.success(true)
                 }
+                "setInstrumentLayers" -> {
+                    val instrIdx         = call.argument<Int>("instrIdx") ?: 0
+                    val layer2PitchCents = call.argument<Double>("layer2PitchCents")?.toFloat() ?: 0f
+                    val layer2Gain       = call.argument<Double>("layer2Gain")?.toFloat() ?: 0f
+                    val layer3PitchCents = call.argument<Double>("layer3PitchCents")?.toFloat() ?: 0f
+                    val layer3Gain       = call.argument<Double>("layer3Gain")?.toFloat() ?: 0f
+                    nativeSetInstrumentLayers(nativeHandle, instrIdx, layer2PitchCents, layer2Gain, layer3PitchCents, layer3Gain)
+                    result.success(true)
+                }
                 "setEqBand" -> {
                     val band   = call.argument<Int>("band") ?: 0
                     val dBgain = call.argument<Double>("dBgain")?.toFloat() ?: 0f
@@ -337,6 +346,7 @@ class AudioEnginePlugin(private val context: Context) {
     private external fun nativeSetInstrumentSends(handle: Long, instrIdx: Int, rev: Float, del: Float, cho: Float)
     private external fun nativeSetInstrumentFilters(handle: Long, instrIdx: Int, hpNorm: Float, lpNorm: Float)
     private external fun nativeSetInstrumentPlaybackParams(handle: Long, instrIdx: Int, pitch: Float, volume: Float, startNorm: Float, endNorm: Float, attackSec: Float, releaseSec: Float, loopMode: Int)
+    private external fun nativeSetInstrumentLayers(handle: Long, instrIdx: Int, layer2PitchCents: Float, layer2Gain: Float, layer3PitchCents: Float, layer3Gain: Float)
     private external fun nativeSetEqBand(handle: Long, band: Int, dBgain: Float)
     private external fun nativeSetHpFreq(handle: Long, hz: Float)
     private external fun nativeSetHpRes(handle: Long, norm: Float)

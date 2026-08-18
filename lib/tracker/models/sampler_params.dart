@@ -37,6 +37,13 @@ class SamplerParams {
   double lpCutoff = 1.0;   // 0..1 → Low Pass cutoff (0=closed, 1=open)
   double hpCutoff = 0.0;   // 0..1 → High Pass cutoff (0=open, 1=closed)
 
+  // Chord/unison layers — extra voices of the SAME sample, summed with layer 1.
+  // Gain 0 = layer off (no voice triggered). Pitch is a ± offset in cents.
+  double layer2PitchCents = 0.0;  // -1200..1200
+  double layer2Gain = 0.0;        // 0..1, 0=off
+  double layer3PitchCents = 0.0;  // -1200..1200
+  double layer3Gain = 0.0;        // 0..1, 0=off
+
   SamplerParams.empty();
 
   SamplerParams.copy(SamplerParams other)
@@ -57,7 +64,11 @@ class SamplerParams {
         delSend = other.delSend,
         revSend = other.revSend,
         lpCutoff = other.lpCutoff,
-        hpCutoff = other.hpCutoff;
+        hpCutoff = other.hpCutoff,
+        layer2PitchCents = other.layer2PitchCents,
+        layer2Gain = other.layer2Gain,
+        layer3PitchCents = other.layer3PitchCents,
+        layer3Gain = other.layer3Gain;
 
   bool get hasValidSample => samplePath != null && samplePath!.isNotEmpty;
 
@@ -80,6 +91,10 @@ class SamplerParams {
     revSend = 0.0;
     lpCutoff = 1.0;
     hpCutoff = 0.0;
+    layer2PitchCents = 0.0;
+    layer2Gain = 0.0;
+    layer3PitchCents = 0.0;
+    layer3Gain = 0.0;
   }
 
   // Helpers for display
@@ -102,6 +117,11 @@ class SamplerParams {
   String getModDisplay() => (modSend * 100).toStringAsFixed(0);  // %
   String getDelDisplay() => (delSend * 100).toStringAsFixed(0);  // %
   String getRevDisplay() => (revSend * 100).toStringAsFixed(0);  // %
+
+  String getLayer2PitchDisplay() => layer2PitchCents.toStringAsFixed(0);  // cents
+  String getLayer2GainDisplay() => (layer2Gain * 100).toStringAsFixed(0); // %
+  String getLayer3PitchDisplay() => layer3PitchCents.toStringAsFixed(0);  // cents
+  String getLayer3GainDisplay() => (layer3Gain * 100).toStringAsFixed(0); // %
   
   String getLpDisplay() {
     if (lpCutoff == 0.0) return 'OFF';

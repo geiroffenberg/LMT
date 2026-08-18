@@ -20,6 +20,13 @@ static constexpr int FX_SND = 16, FX_SNC = 17, FX_PIT = 19;
 // Sampler automation
 static constexpr int FX_SST = 20, FX_SEN = 21, FX_ATK = 22, FX_REL = 23;
 static constexpr int FX_LPF = 24, FX_HPF = 25, FX_RES = 26, FX_LOP = 27;
+// Chord/unison layer pitch overrides (semitone offset added to the
+// instrument's Layer2/Layer3 pitch setting, for this note only)
+static constexpr int FX_PI2 = 28, FX_PI3 = 29;
+
+// Shared by FX_PIT and FX_PI2/FX_PI3: 00=0, 01-49=+1..+49 semitones,
+// 50=0, 51-99=-1..-49 semitones (matches FX_PIT's existing convention).
+static inline int fxValToSemis(int val) { return (val < 50) ? val : (50 - val); }
 
 // Global audio engine instance (for JNI access)
 static AudioEngine* gAudioEngine = nullptr;
@@ -91,6 +98,10 @@ bool AudioEngine::open() {
         mInstrumentAttack[i].store(0.0f,  std::memory_order_relaxed);
         mInstrumentRelease[i].store(0.05f, std::memory_order_relaxed);
         mInstrumentLoopMode[i].store(0,    std::memory_order_relaxed);
+        mInstrumentLayer2PitchCents[i].store(0.0f, std::memory_order_relaxed);
+        mInstrumentLayer2Gain[i].store(0.0f, std::memory_order_relaxed);
+        mInstrumentLayer3PitchCents[i].store(0.0f, std::memory_order_relaxed);
+        mInstrumentLayer3Gain[i].store(0.0f, std::memory_order_relaxed);
     }
 
     // Initialize per-track dry gain (unity) and mute flags (off)
@@ -244,6 +255,15 @@ void AudioEngine::noteOnRegion(int instrumentIdx, float frequencyHz, float level
     voice.hpS1 = 0.0f; voice.hpS2 = 0.0f;
     voice.lpS1 = 0.0f; voice.lpS2 = 0.0f;
 
+    // Chord/unison layers 2+3 for preview audition (mirrors triggerNote)
+    const int previewLayerBase = kPreviewLayerVoiceBase + instrumentIdx * kLayerVoicesPerTrack;
+    triggerLayerVoice(previewLayerBase + 0, voice,
+        mInstrumentLayer2PitchCents[instrumentIdx].load(std::memory_order_relaxed),
+        mInstrumentLayer2Gain[instrumentIdx].load(std::memory_order_relaxed));
+    triggerLayerVoice(previewLayerBase + 1, voice,
+        mInstrumentLayer3PitchCents[instrumentIdx].load(std::memory_order_relaxed),
+        mInstrumentLayer3Gain[instrumentIdx].load(std::memory_order_relaxed));
+
     LOGD("noteOnRegion: idx=%d, attackTime=%.4fs (samples=%d), releaseTime=%.4fs (samples=%d), loopMode=%d, freq=%.1f, level=%.2f",
         instrumentIdx, attackTime, voice.attackSamples, releaseTime, voice.releaseSamples, loopMode, frequencyHz, level);
 }
@@ -253,6 +273,7 @@ void AudioEngine::noteOff(int instrumentIdx) {
 
     std::lock_guard<std::mutex> lock(mVoiceMutex);
     Voice& voice = mVoices[kSeqVoices + instrumentIdx];
+    releaseLayerVoicePair(kPreviewLayerVoiceBase + instrumentIdx * kLayerVoicesPerTrack);
     if (!voice.isActive || voice.isFadingOut) return; // already silent or already fading
     // Snapshot current envelope so the release starts from the right level
     if (voice.attackSamples > 0 && voice.elapsedSamples < voice.attackSamples)
@@ -471,6 +492,73 @@ void AudioEngine::triggerNote(int instrIdx, int midiNote, int vol, int trackIdx,
     // --- Apply FX slots ---
     for (int f = 0; f < 3; f++) {
         applyFxToVoice(v, fxCmds[f], fxVals[f], lineSamples);
+    }
+
+    // --- PI2/PI3: per-row semitone offset added to this note's layer pitch ---
+    float layer2Cents = mInstrumentLayer2PitchCents[instrIdx].load(std::memory_order_relaxed);
+    float layer3Cents = mInstrumentLayer3PitchCents[instrIdx].load(std::memory_order_relaxed);
+    for (int f = 0; f < 3; f++) {
+        if (fxCmds[f] == FX_PI2) layer2Cents += fxValToSemis(fxVals[f]) * 100.0f;
+        if (fxCmds[f] == FX_PI3) layer3Cents += fxValToSemis(fxVals[f]) * 100.0f;
+    }
+
+    // --- Chord/unison layers 2+3: extra voices of the same sample, pitch/gain-shifted ---
+    const int layerBase = kSeqLayerVoiceBase + trackIdx * kLayerVoicesPerTrack;
+    triggerLayerVoice(layerBase + 0, v, layer2Cents,
+        mInstrumentLayer2Gain[instrIdx].load(std::memory_order_relaxed));
+    triggerLayerVoice(layerBase + 1, v, layer3Cents,
+        mInstrumentLayer3Gain[instrIdx].load(std::memory_order_relaxed));
+}
+
+// ---------------------------------------------------------------------------
+// triggerLayerVoice — arm an aux chord/unison layer voice by copying the
+// just-armed source voice with a pitch (cents) and gain multiplier applied.
+// gainMul<=0 silences the slot immediately (layer is "off"). Layer voices are
+// kept deliberately simple: no per-row FX modulation (VIB/ARP/slides/etc.),
+// just a static pitch-shifted, gain-shifted copy that shares note-on/off
+// timing with the voice it was copied from.
+// ---------------------------------------------------------------------------
+void AudioEngine::triggerLayerVoice(int layerVoiceIdx, const Voice& src, float pitchCents, float gainMul) {
+    if (layerVoiceIdx < 0 || layerVoiceIdx >= kMaxVoices) return;
+    Voice& lv = mVoices[layerVoiceIdx];
+    if (gainMul <= 0.0001f) {
+        lv.isActive   = false;
+        lv.gain       = 0.0f;
+        lv.gainTarget = 0.0f;
+        return;
+    }
+    // Clamp defensively — instrument setting (\u00b11200) plus a per-row PI2/PI3
+    // offset (\u00b14900) could otherwise stack into an extreme pitch.
+    pitchCents = std::clamp(pitchCents, -6100.0f, 6100.0f);
+    lv = src;
+    lv.frequency  *= std::pow(2.0f, pitchCents / 1200.0f);
+    lv.arpBaseFreq = lv.frequency;
+    lv.level      *= gainMul;
+    // Strip any modulation state copied from src — layers stay static.
+    lv.arpStepSamples = 0;
+    lv.slideRateHz    = 0.0f;
+    lv.vibRateRad     = 0.0f;
+    lv.treRateRad     = 0.0f;
+    lv.gatRateRad     = 0.0f;
+    lv.retCount       = 0;
+    lv.kilCountdown   = -1;
+}
+
+// ---------------------------------------------------------------------------
+// releaseLayerVoicePair — start the release envelope on both layer voices at
+// layerVoiceBaseIdx/+1, mirroring a note-off just applied to their main voice.
+// ---------------------------------------------------------------------------
+void AudioEngine::releaseLayerVoicePair(int layerVoiceBaseIdx) {
+    for (int layer = 0; layer < kLayerVoicesPerTrack; ++layer) {
+        const int idx = layerVoiceBaseIdx + layer;
+        if (idx < 0 || idx >= kMaxVoices) continue;
+        Voice& lv = mVoices[idx];
+        if (lv.isActive && !lv.isFadingOut) {
+            lv.envLevel = (lv.attackSamples > 0 && lv.elapsedSamples < lv.attackSamples)
+                ? (float)lv.elapsedSamples / (float)lv.attackSamples
+                : 1.0f;
+            lv.isFadingOut = true;
+        }
     }
 }
 
@@ -724,6 +812,7 @@ void AudioEngine::fireRow(const QueuedRow& row) {
                         : 1.0f;
                     lv.isFadingOut = true;
                 }
+                releaseLayerVoicePair(kSeqLayerVoiceBase + trackIdx * kLayerVoicesPerTrack);
             } else if (midiNote >= 0 && trackIdx < 8) {
                 // No instrument on this step — retrigger last instrument at new pitch
                 const int lastInstr = mLastInstrOnTrack[trackIdx];
@@ -749,6 +838,7 @@ void AudioEngine::fireRow(const QueuedRow& row) {
                     : 1.0f;
                 v.isFadingOut = true;
             }
+            releaseLayerVoicePair(kSeqLayerVoiceBase + trackIdx * kLayerVoicesPerTrack);
         } else if (midiNote >= 0) {
             // Track which instrument last fired on this track
             if (trackIdx >= 0 && trackIdx < 8) mLastInstrOnTrack[trackIdx] = instrIdx;
@@ -1711,6 +1801,15 @@ void AudioEngine::setInstrumentPlaybackParams(int instrIdx, float pitch, float v
     mInstrumentLoopMode[instrIdx].store(loopMode, std::memory_order_relaxed);
 }
 
+void AudioEngine::setInstrumentLayers(int instrIdx, float layer2PitchCents, float layer2Gain,
+                                                      float layer3PitchCents, float layer3Gain) {
+    if (instrIdx < 0 || instrIdx >= kMaxInstruments) return;
+    mInstrumentLayer2PitchCents[instrIdx].store(std::clamp(layer2PitchCents, -1200.0f, 1200.0f), std::memory_order_relaxed);
+    mInstrumentLayer2Gain[instrIdx].store(std::clamp(layer2Gain, 0.0f, 1.0f), std::memory_order_relaxed);
+    mInstrumentLayer3PitchCents[instrIdx].store(std::clamp(layer3PitchCents, -1200.0f, 1200.0f), std::memory_order_relaxed);
+    mInstrumentLayer3Gain[instrIdx].store(std::clamp(layer3Gain, 0.0f, 1.0f), std::memory_order_relaxed);
+}
+
 void AudioEngine::setReverbSize(float norm) {
     if (mMasterFX) mMasterFX->setReverbSize(norm);
 }
@@ -1938,6 +2037,15 @@ Java_com_metamind_lmt_AudioEnginePlugin_nativeSetInstrumentPlaybackParams(JNIEnv
                                                                           jfloat attackSec, jfloat releaseSec, jint loopMode) {
     reinterpret_cast<AudioEngine*>(handle)->setInstrumentPlaybackParams(
         static_cast<int>(instrIdx), pitch, volume, startNorm, endNorm, attackSec, releaseSec, static_cast<int>(loopMode));
+}
+
+JNIEXPORT void JNICALL
+Java_com_metamind_lmt_AudioEnginePlugin_nativeSetInstrumentLayers(JNIEnv *env, jobject obj, jlong handle,
+                                                                   jint instrIdx,
+                                                                   jfloat layer2PitchCents, jfloat layer2Gain,
+                                                                   jfloat layer3PitchCents, jfloat layer3Gain) {
+    reinterpret_cast<AudioEngine*>(handle)->setInstrumentLayers(
+        static_cast<int>(instrIdx), layer2PitchCents, layer2Gain, layer3PitchCents, layer3Gain);
 }
 
 JNIEXPORT void JNICALL

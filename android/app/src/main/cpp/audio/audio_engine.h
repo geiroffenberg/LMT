@@ -14,7 +14,14 @@
 
 static constexpr int kMaxInstruments = 99; // one per instrument in LMT
 static constexpr int kSeqVoices = 8;      // voices 0-7 reserved for sequencer tracks
-static constexpr int kMaxVoices = kSeqVoices + kMaxInstruments; // 8 seq + 99 preview = 107
+// Chord/unison layers: each instrument can add 2 extra pitch/gain-shifted
+// voices (layer 2 + layer 3) that fire alongside the main voice. Kept as
+// separate fixed slots (not mixed into the seq/preview indexing above) so
+// existing single-sample instruments are completely unaffected.
+static constexpr int kLayerVoicesPerTrack = 2;
+static constexpr int kSeqLayerVoiceBase = kSeqVoices + kMaxInstruments;               // 107
+static constexpr int kPreviewLayerVoiceBase = kSeqLayerVoiceBase + kSeqVoices * kLayerVoicesPerTrack; // 123
+static constexpr int kMaxVoices = kPreviewLayerVoiceBase + kMaxInstruments * kLayerVoicesPerTrack;    // 123 + 198 = 321
 
 /// WAV sample data container
 struct SampleData {
@@ -207,6 +214,11 @@ public:
                                      float startNorm, float endNorm,
                                      float attackSec, float releaseSec, int loopMode);
 
+    // Chord/unison layers 2+3: pitch offset in cents, gain 0..1 (0 = layer off).
+    // These fire/release together with the instrument's main voice.
+    void setInstrumentLayers(int instrIdx, float layer2PitchCents, float layer2Gain,
+                                            float layer3PitchCents, float layer3Gain);
+
     // Per-track peak levels for metering (linear 0..1, with slow decay)
     float getTrackPeak(int t) const { return (t >= 0 && t < 8) ? mTrackPeakLinear[t] : 0.0f; }
 
@@ -298,6 +310,12 @@ private:
     std::atomic<float> mInstrumentRelease[kMaxInstruments];    // release time in seconds
     std::atomic<int>   mInstrumentLoopMode[kMaxInstruments];   // 0=OFF,1=LOOP,2=PING
 
+    // Chord/unison layer 2/3 params (cents offset + gain, 0 gain = off)
+    std::atomic<float> mInstrumentLayer2PitchCents[kMaxInstruments];
+    std::atomic<float> mInstrumentLayer2Gain[kMaxInstruments];
+    std::atomic<float> mInstrumentLayer3PitchCents[kMaxInstruments];
+    std::atomic<float> mInstrumentLayer3Gain[kMaxInstruments];
+
     // Per-track peak levels for VU meters (linear 0..1, audio-thread write / JNI read)
     float mTrackPeakLinear[8] = {};
     float mMasterPeakLinear   = 0.0f;
@@ -326,6 +344,14 @@ private:
     // triggerNote (note-on FX) and fireRow (continuation FX on a held voice).
     // Must be called under mVoiceMutex.
     void applyFxToVoice(Voice& v, int cmd, int val, int32_t lineSamples);
+
+    // Arm (or silence, if gainMul<=0) an aux chord/unison layer voice by
+    // copying `src` (the just-armed main voice) with a pitch/gain offset.
+    void triggerLayerVoice(int layerVoiceIdx, const Voice& src, float pitchCents, float gainMul);
+
+    // Start the release envelope on both layer voices belonging to a track/
+    // instrument, mirroring the release just started on their main voice.
+    void releaseLayerVoicePair(int layerVoiceBaseIdx);
 
     // Apply FX slots from a no-note (hold / FX-only) step to the voice already
     // playing on the given track, without re-triggering. No-op if no live voice.

@@ -217,6 +217,20 @@ class NativeAudioEngine {
         'loopMode': loopMode,
       });
 
+  /// Push chord/unison layer 2+3 params (pitch offset in cents, gain 0..1).
+  /// Gain 0 = that layer is off (no extra voice triggered).
+  static Future<void> setInstrumentLayers(
+          int instrIdx,
+          double layer2PitchCents, double layer2Gain,
+          double layer3PitchCents, double layer3Gain) =>
+      _invoke('setInstrumentLayers', {
+        'instrIdx': instrIdx,
+        'layer2PitchCents': layer2PitchCents,
+        'layer2Gain': layer2Gain,
+        'layer3PitchCents': layer3PitchCents,
+        'layer3Gain': layer3Gain,
+      });
+
   // ---------------------------------------------------------------------------
   // Master Effects API
   // ---------------------------------------------------------------------------
