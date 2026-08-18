@@ -4,11 +4,14 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'dart:math' as math;
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../tracker_model.dart';
 import '../tracker_styles.dart';
 import '../models/sampler_params.dart';
 import '../widgets/waveform_painter.dart';
+import '../sample_browser.dart';
 import '../audio/audio_engine.dart';
+import '../audio/wav_encoder.dart';
 
 const _rowH    = 36.0;
 
@@ -40,6 +43,7 @@ class _SamplerWindowState extends State<SamplerWindow> {
   bool _isCropping = false;
   bool _isChopping = false;
   bool _isNormalizing = false;
+  String? _lastBrowserFolder;
   Timer? _previewTimer;
 
   @override
@@ -167,6 +171,111 @@ class _SamplerWindowState extends State<SamplerWindow> {
     } catch (e) {
       return null;
     }
+  }
+
+  /// Record a new sample from the microphone and load it into [instrumentIdx].
+  Future<void> _recordSample() async {
+    // 1. Request microphone permission.
+    if (Platform.isAndroid) {
+      final status = await Permission.microphone.request();
+      if (!status.isGranted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Microphone permission denied')),
+          );
+        }
+        return;
+      }
+    }
+    if (!mounted) return;
+
+    // 2. Warm up the input stream before recording.
+    await NativeAudioEngine.openRecordingStream();
+    if (!mounted) {
+      await NativeAudioEngine.closeRecordingStream();
+      return;
+    }
+
+    // 3. Show the recording dialog (it starts/stops the take).
+    final shouldSave = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const _RecordingDialog(),
+    );
+
+    // 4. Retrieve the captured audio and release the input stream.
+    final result = await NativeAudioEngine.stopRecording();
+    await NativeAudioEngine.closeRecordingStream();
+
+    if (shouldSave != true || result.samples.isEmpty) return;
+
+    // 5. Encode to WAV and save into the app documents/samples folder.
+    final wavBytes = WavEncoder.encodeWav(
+      samples: result.samples,
+      sampleRate: result.sampleRate,
+      numChannels: 1,
+    );
+    final docsDir = await getApplicationDocumentsDirectory();
+    final dir = '${docsDir.path}/samples';
+    await Directory(dir).create(recursive: true);
+    int n = 1;
+    String outName;
+    do {
+      outName = 'rec_$n.wav';
+      n++;
+    } while (File('$dir/$outName').existsSync());
+    final outPath = '$dir/$outName';
+    await File(outPath).writeAsBytes(wavBytes, flush: true);
+
+    // 6. Load the new recording into the instrument slot.
+    model.loadSampleForInstrument(instrumentIdx, outPath);
+    await NativeAudioEngine.loadSample(instrumentIdx, outPath);
+
+    // Reset sampler to the new recording and refresh the waveform.
+    sampler = model.getSampler(instrumentIdx);
+    await _loadWaveformPeaks();
+
+    if (mounted) {
+      onStateChange();
+      setState(() {});
+    }
+  }
+
+  /// Open the sample browser and load the selected sample into this slot.
+  Future<void> _loadSample() async {
+    final samplePath = await SampleBrowser.show(
+      context,
+      previewSlot: instrumentIdx,
+      defaultFolder: model.defaultSampleFolder,
+      lastFolder: _lastBrowserFolder,
+      onBookmarkFolder: (folderPath) async {
+        await model.bookmarkSampleFolder(folderPath);
+        if (mounted) setState(() {});
+      },
+      onRemoveBookmark: () async {
+        await model.removeBookmark();
+        if (mounted) setState(() {});
+      },
+    );
+
+    if (samplePath != null) {
+      _lastBrowserFolder = _getParentFolder(samplePath);
+      model.loadSampleForInstrument(instrumentIdx, samplePath);
+      await NativeAudioEngine.loadSample(instrumentIdx, samplePath);
+      sampler = model.getSampler(instrumentIdx);
+      if (mounted) setState(() {});
+      await _loadWaveformPeaks();
+    } else {
+      // Restore correct sample — browser preview may have clobbered this slot.
+      final orig = model.instruments[instrumentIdx].sample;
+      if (orig.isNotEmpty) {
+        await NativeAudioEngine.loadSample(instrumentIdx, orig);
+      }
+    }
+  }
+
+  String _getParentFolder(String filePath) {
+    return filePath.replaceAll(RegExp(r'[^${Platform.pathSeparator}]*$'), '');
   }
 
   Future<void> _cropSample() async {
@@ -885,6 +994,48 @@ class _SamplerWindowState extends State<SamplerWindow> {
                           Expanded(
                             child: GestureDetector(
                               behavior: HitTestBehavior.opaque,
+                              onTap: _loadSample,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  border: Border(
+                                    right: BorderSide(color: Colors.white, width: 1),
+                                  ),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  'LD',
+                                  style: trackerStyle(
+                                    size: fontSize - 4,
+                                    color: kGreen,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: _recordSample,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  border: Border(
+                                    right: BorderSide(color: Colors.white, width: 1),
+                                  ),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  'REC',
+                                  style: trackerStyle(
+                                    size: fontSize - 4,
+                                    color: kGreen,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
                               onTap: _isCropping ? null : _cropSample,
                               child: Container(
                                 decoration: BoxDecoration(
@@ -1485,5 +1636,128 @@ class _SamplerWindowState extends State<SamplerWindow> {
         );
       }
     }
+  }
+}
+
+/// Modal recording dialog: starts a take on open, shows a red dot + elapsed
+/// timer, and pops `true` to keep the recording or `false` to discard it.
+class _RecordingDialog extends StatefulWidget {
+  const _RecordingDialog();
+
+  @override
+  State<_RecordingDialog> createState() => _RecordingDialogState();
+}
+
+class _RecordingDialogState extends State<_RecordingDialog> {
+  static const int _maxSeconds = 60;
+  Timer? _timer;
+  int _elapsedMs = 0;
+  bool _blink = true;
+
+  @override
+  void initState() {
+    super.initState();
+    NativeAudioEngine.startRecording();
+    _timer = Timer.periodic(const Duration(milliseconds: 100), (t) {
+      if (!mounted) return;
+      setState(() {
+        _elapsedMs += 100;
+        _blink = (_elapsedMs ~/ 500).isEven;
+      });
+      if (_elapsedMs >= _maxSeconds * 1000) {
+        Navigator.of(context).pop(true);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  String get _timeLabel {
+    final totalSec = _elapsedMs ~/ 1000;
+    final m = (totalSec ~/ 60).toString().padLeft(2, '0');
+    final s = (totalSec % 60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.black,
+      shape: RoundedRectangleBorder(
+        side: const BorderSide(color: Colors.white, width: 1),
+        borderRadius: BorderRadius.zero,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.circle,
+                  color: _blink
+                      ? Colors.red
+                      : Colors.red.withValues(alpha: 0.2),
+                  size: 14,
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  'RECORDING',
+                  style: trackerStyle(size: 14, color: Colors.red),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Text(_timeLabel, style: trackerStyle(size: 28, color: kGreen)),
+            const SizedBox(height: 20),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => Navigator.of(context).pop(false),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.white, width: 1.5),
+                    ),
+                    child: Text(
+                      'CANCEL',
+                      style: trackerStyle(size: 12, color: Colors.white70),
+                    ),
+                  ),
+                ),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => Navigator.of(context).pop(true),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: kGreen, width: 1.5),
+                    ),
+                    child: Text(
+                      'STOP',
+                      style: trackerStyle(size: 12, color: kGreen),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
