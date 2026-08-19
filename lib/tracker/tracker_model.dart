@@ -29,15 +29,20 @@ class ChainItem {
 }
 
 class Phrase {
-  final List<PhraseStep> steps = List.generate(99, (i) => PhraseStep()..note = (i == 16 ? PhraseStep.noteEnd : PhraseStep.noteNone));
+  final List<PhraseStep> steps = List.generate(
+    99,
+    (i) =>
+        PhraseStep()
+          ..note = (i == 16 ? PhraseStep.noteEnd : PhraseStep.noteNone),
+  );
   int length = 16; // Number of active steps (1-99)
 }
 
 class PhraseStep {
   // Special note values
-  static const int noteNone = -1;  // empty step — no note triggered
-  static const int noteOff  = -2;  // stop the sample on this instrument
-  static const int noteEnd  = -3;  // marks end of phrase (not played)
+  static const int noteNone = -1; // empty step — no note triggered
+  static const int noteOff = -2; // stop the sample on this instrument
+  static const int noteEnd = -3; // marks end of phrase (not played)
 
   int instrument = 0;
   int volume = 80;
@@ -47,11 +52,24 @@ class PhraseStep {
   // Helper to get note display (e.g., "C-4", "C#4", "---", "OFF", "END")
   // MIDI 0-11 display as I01-I12 (slice player mode)
   String getNoteDisplay() {
-    if (note == noteEnd)  return 'END';
-    if (note == noteOff)  return 'OFF';
+    if (note == noteEnd) return 'END';
+    if (note == noteOff) return 'OFF';
     if (note < 0 || note > 120) return '---';
     if (note <= 11) return 'I${(note + 1).toString().padLeft(2, '0')}';
-    const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    const noteNames = [
+      'C',
+      'C#',
+      'D',
+      'D#',
+      'E',
+      'F',
+      'F#',
+      'G',
+      'G#',
+      'A',
+      'A#',
+      'B',
+    ];
     final octave = (note ~/ 12) - 1; // MIDI 60 = C-4 (middle C)
     final semitone = note % 12;
     final noteName = noteNames[semitone];
@@ -75,7 +93,7 @@ class Instrument {
   int mid = 0;
   int bass = 0;
   String sample = '';
-  
+
   // Sampler state
   SamplerParams sampler = SamplerParams.empty();
 }
@@ -89,31 +107,31 @@ class MixerChannel {
 
 class MasterFx {
   // Reverb (Freeverb)
-  double reverbSize  = 0.5;  // room size 0–1
-  double reverbDamp  = 0.5;  // damping   0–1
-  double reverbWidth = 1.0;  // stereo width 0–1
+  double reverbSize = 0.5; // room size 0–1
+  double reverbDamp = 0.5; // damping   0–1
+  double reverbWidth = 1.0; // stereo width 0–1
   // Delay
-  int    delayLines    = 50;    // 0–99: 50 = half a line at current BPM/LPB
-  double delayFeedback = 0.4;   // 0–1
+  int delayLines = 50; // 0–99: 50 = half a line at current BPM/LPB
+  double delayFeedback = 0.4; // 0–1
 
   // Chorus
-  double chorusRate  = 1.0;  // Hz   (0.1–5)
-  double chorusDepth = 0.5;  // 0–1
+  double chorusRate = 1.0; // Hz   (0.1–5)
+  double chorusDepth = 0.5; // 0–1
 
   // 5-band master EQ gains in dB (−12 … +12)
-  double eqBand1 = 0.0;  //  80 Hz  (low shelf)
-  double eqBand2 = 0.0;  // 250 Hz
-  double eqBand3 = 0.0;  //   1 kHz (mid)
-  double eqBand4 = 0.0;  //   4 kHz
-  double eqBand5 = 0.0;  //  12 kHz (high shelf)
+  double eqBand1 = 0.0; //  80 Hz  (low shelf)
+  double eqBand2 = 0.0; // 250 Hz
+  double eqBand3 = 0.0; //   1 kHz (mid)
+  double eqBand4 = 0.0; //   4 kHz
+  double eqBand5 = 0.0; //  12 kHz (high shelf)
 
   // High-pass filter
-  double hpFreq = 20.0;   // Hz  (20–1000)
-  double hpRes  = 0.5;    // resonance 0–1
+  double hpFreq = 20.0; // Hz  (20–1000)
+  double hpRes = 0.5; // resonance 0–1
 
   // Low-pass filter
   double lpFreq = 20000.0; // Hz  (1000–20000)
-  double lpRes  = 0.5;     // resonance 0–1
+  double lpRes = 0.5; // resonance 0–1
 
   // Master limiter threshold in dB (−24 … 0; 0 = ceiling only)
   double limiterThreshold = 0.0;
@@ -134,14 +152,21 @@ class TrackerModel {
   bool isPlaying = false;
   bool isLooping = false;
 
+  /// Tempo currently shown while playing — reflects BPM FX during playback.
+  /// 0 = not using an override → display `song.bpm`. Reset to 0 on stop/looping.
+  int displayBpm = 0;
+
   // Phrase window — remembered last values for quick insert
-  int lastPhraseNote       = 60; // C-4
+  int lastPhraseNote = 60; // C-4
   int lastPhraseInstrument = 1;
-  List<double> audioLevels = List.filled(8, 0.0); // linear peak 0..1 per channel
-  double masterPeak = 0.0;                         // post-limiter master bus peak 0..1
+  List<double> audioLevels = List.filled(
+    8,
+    0.0,
+  ); // linear peak 0..1 per channel
+  double masterPeak = 0.0; // post-limiter master bus peak 0..1
 
   // Per-track mute / solo (M8-style: solo wins). Affects only newly enqueued rows.
-  final Set<int> mutedTracks  = <int>{};
+  final Set<int> mutedTracks = <int>{};
   final Set<int> soloedTracks = <int>{};
 
   /// Returns true if track [t] should be audible given current mute/solo state.
@@ -207,9 +232,11 @@ class TrackerModel {
               {
                 'p': it.phrase,
                 't': it.transpose,
-                'fx': [for (final f in it.fx) [f.name, f.value]],
-              }
-          ]
+                'fx': [
+                  for (final f in it.fx) [f.name, f.value],
+                ],
+              },
+          ],
       ],
       'phrases': [
         for (final ph in phrases)
@@ -219,9 +246,11 @@ class TrackerModel {
                 'n': st.note,
                 'i': st.instrument,
                 'v': st.volume,
-                'fx': [for (final f in st.fx) [f.name, f.value]],
-              }
-          ]
+                'fx': [
+                  for (final f in st.fx) [f.name, f.value],
+                ],
+              },
+          ],
       ],
       'instruments': [
         for (final inst in instruments)
@@ -231,11 +260,11 @@ class TrackerModel {
             'treble': inst.treble,
             'mid': inst.mid,
             'bass': inst.bass,
-          }
+          },
       ],
       'mixer': [
         for (final ch in mixerChannels)
-          [ch.level, ch.reverbSend, ch.delaySend, ch.chorusSend]
+          [ch.level, ch.reverbSend, ch.delaySend, ch.chorusSend],
       ],
     };
   }
@@ -255,11 +284,15 @@ class TrackerModel {
       final items = ch[i] as List;
       for (int j = 0; j < 99 && j < items.length; j++) {
         final m = items[j] as Map;
-        chains[i].items[j].phrase    = m['p'] as int;
+        chains[i].items[j].phrase = m['p'] as int;
         chains[i].items[j].transpose = m['t'] as int;
         final fx = m['fx'] as List;
-        for (int k = 0; k < chains[i].items[j].fx.length && k < fx.length; k++) {
-          chains[i].items[j].fx[k].name  = (fx[k] as List)[0] as String;
+        for (
+          int k = 0;
+          k < chains[i].items[j].fx.length && k < fx.length;
+          k++
+        ) {
+          chains[i].items[j].fx[k].name = (fx[k] as List)[0] as String;
           chains[i].items[j].fx[k].value = (fx[k] as List)[1] as int;
         }
       }
@@ -269,12 +302,16 @@ class TrackerModel {
       final steps = ph[i] as List;
       for (int j = 0; j < 99 && j < steps.length; j++) {
         final m = steps[j] as Map;
-        phrases[i].steps[j].note       = m['n'] as int;
+        phrases[i].steps[j].note = m['n'] as int;
         phrases[i].steps[j].instrument = m['i'] as int;
-        phrases[i].steps[j].volume     = m['v'] as int;
+        phrases[i].steps[j].volume = m['v'] as int;
         final fx = m['fx'] as List;
-        for (int k = 0; k < phrases[i].steps[j].fx.length && k < fx.length; k++) {
-          phrases[i].steps[j].fx[k].name  = (fx[k] as List)[0] as String;
+        for (
+          int k = 0;
+          k < phrases[i].steps[j].fx.length && k < fx.length;
+          k++
+        ) {
+          phrases[i].steps[j].fx[k].name = (fx[k] as List)[0] as String;
           phrases[i].steps[j].fx[k].value = (fx[k] as List)[1] as int;
         }
       }
@@ -282,28 +319,30 @@ class TrackerModel {
     final ins = s['instruments'] as List;
     for (int i = 0; i < 99 && i < ins.length; i++) {
       final m = ins[i] as Map;
-      instruments[i].filter    = m['filter']    as int;
+      instruments[i].filter = m['filter'] as int;
       instruments[i].resonance = m['resonance'] as int;
-      instruments[i].treble    = m['treble']    as int;
-      instruments[i].mid       = m['mid']       as int;
-      instruments[i].bass      = m['bass']      as int;
+      instruments[i].treble = m['treble'] as int;
+      instruments[i].mid = m['mid'] as int;
+      instruments[i].bass = m['bass'] as int;
     }
     final mx = s['mixer'] as List;
     for (int i = 0; i < 8 && i < mx.length; i++) {
       final row = mx[i] as List;
-      mixerChannels[i].level      = row[0] as int;
+      mixerChannels[i].level = row[0] as int;
       mixerChannels[i].reverbSend = row[1] as int;
-      mixerChannels[i].delaySend  = row[2] as int;
+      mixerChannels[i].delaySend = row[2] as int;
       mixerChannels[i].chorusSend = row[3] as int;
     }
   }
 
   // --- Song playback position ---
-  int playheadRow = 0;        // which song row is currently playing
-  int playheadChainRow = 0;   // which chain slot (row) is currently playing
-  int chainPhraseIndex = 0;   // which phrase-slot index we're on within the chains
-  int phraseStep = 0;         // current step within the current phrase slot
-  int masterStepLength = 0;   // max phrase length across all active tracks at current slot
+  int playheadRow = 0; // which song row is currently playing
+  int playheadChainRow = 0; // which chain slot (row) is currently playing
+  int chainPhraseIndex =
+      0; // which phrase-slot index we're on within the chains
+  int phraseStep = 0; // current step within the current phrase slot
+  int masterStepLength =
+      0; // max phrase length across all active tracks at current slot
 
   // Derived: per-track phrase indices (which actual phrase each track is playing)
   // computed on demand from song.chains and chains data
@@ -386,6 +425,7 @@ class TrackerModel {
 
   void stopPlayback() {
     isPlaying = false;
+    displayBpm = 0;
   }
 
   /// Create a new song, clearing all data and resetting UI state
@@ -435,8 +475,9 @@ class TrackerModel {
   }
 
   /// Returns true if phrase [idx] (0-based) is completely empty.
-  bool _isPhraseEmpty(int idx) =>
-      phrases[idx].steps.every((s) => s.note == PhraseStep.noteNone || s.note == PhraseStep.noteEnd);
+  bool _isPhraseEmpty(int idx) => phrases[idx].steps.every(
+    (s) => s.note == PhraseStep.noteNone || s.note == PhraseStep.noteEnd,
+  );
 
   /// Deep-copy phrase [srcIdx] → [dstIdx] (both 0-based).
   void _copyPhrase(int srcIdx, int dstIdx) {
@@ -446,11 +487,11 @@ class TrackerModel {
     for (int i = 0; i < src.steps.length && i < dst.steps.length; i++) {
       final s = src.steps[i];
       final d = dst.steps[i];
-      d.note       = s.note;
+      d.note = s.note;
       d.instrument = s.instrument;
-      d.volume     = s.volume;
+      d.volume = s.volume;
       for (int f = 0; f < s.fx.length && f < d.fx.length; f++) {
-        d.fx[f].name  = s.fx[f].name;
+        d.fx[f].name = s.fx[f].name;
         d.fx[f].value = s.fx[f].value;
       }
     }
@@ -476,16 +517,21 @@ class TrackerModel {
     // Build a map of original phrase number → new (duplicated) phrase number.
     // Allocate one new empty phrase per unique non-zero phrase ref in the source.
     final Map<int, int> phraseRemap = {};
-    final Set<int> reserved = {}; // phrase indices we've already used as targets
+    final Set<int> reserved =
+        {}; // phrase indices we've already used as targets
     for (final item in chains[sourceIdx].items) {
       final pn = item.phrase;
       if (pn <= 0 || phraseRemap.containsKey(pn)) continue;
       int newPn = -1;
       for (int i = 0; i < 99; i++) {
         if (reserved.contains(i)) continue;
-        if (_isPhraseEmpty(i)) { newPn = i + 1; break; }
+        if (_isPhraseEmpty(i)) {
+          newPn = i + 1;
+          break;
+        }
       }
-      if (newPn == -1) break; // out of free phrase slots — keep original ref for the rest
+      if (newPn == -1)
+        break; // out of free phrase slots — keep original ref for the rest
       reserved.add(newPn - 1);
       _copyPhrase(pn - 1, newPn - 1);
       phraseRemap[pn] = newPn;
@@ -495,10 +541,10 @@ class TrackerModel {
     for (int i = 0; i < chains[sourceIdx].items.length; i++) {
       final srcItem = chains[sourceIdx].items[i];
       final newPhrase = phraseRemap[srcItem.phrase] ?? srcItem.phrase;
-      chains[targetIdx].items[i].phrase    = newPhrase;
+      chains[targetIdx].items[i].phrase = newPhrase;
       chains[targetIdx].items[i].transpose = srcItem.transpose;
       for (int f = 0; f < srcItem.fx.length; f++) {
-        chains[targetIdx].items[i].fx[f].name  = srcItem.fx[f].name;
+        chains[targetIdx].items[i].fx[f].name = srcItem.fx[f].name;
         chains[targetIdx].items[i].fx[f].value = srcItem.fx[f].value;
       }
     }
@@ -571,8 +617,8 @@ class TrackerModel {
 
   // Which chain / phrase is currently "open" in the Chain/Phrase windows.
   // Set when the user navigates into those windows.
-  int activeChainIdx  = 0;  // 0-based index into model.chains
-  int activePhraseIdx = 0;  // 0-based index into model.phrases
+  int activeChainIdx = 0; // 0-based index into model.chains
+  int activePhraseIdx = 0; // 0-based index into model.phrases
   int cursorRow = 0;
   int cursorCol = 0;
   int scrollRow = 0;
@@ -617,26 +663,25 @@ class TrackerModel {
   void selectLine(int row) {
     if (lineSelStart == null) {
       lineSelStart = row;
-      lineSelEnd   = row;
+      lineSelEnd = row;
     } else {
       lineSelEnd = row;
     }
     // Exit cell edit mode when in line selection
-    inEditMode       = false;
-    editBuffer       = '';
-    editMenuVisible  = true;
+    inEditMode = false;
+    editBuffer = '';
+    editMenuVisible = true;
   }
 
   void clearLineSelection() {
-    lineSelStart    = null;
-    lineSelEnd      = null;
+    lineSelStart = null;
+    lineSelEnd = null;
     editMenuVisible = false;
   }
 
   // ── Row-level helpers ────────────────────────────────────────────────────
 
-  bool _isSongRowEmpty(int row) =>
-      song.chains[row].every((v) => v == 0);
+  bool _isSongRowEmpty(int row) => song.chains[row].every((v) => v == 0);
 
   bool _isChainRowEmpty(int row) =>
       chains[activeChainIdx].items[row].phrase == 0;
@@ -660,20 +705,20 @@ class TrackerModel {
     } else if (currentWindow == 1) {
       final s = chains[activeChainIdx].items[src];
       final d = chains[activeChainIdx].items[dest];
-      d.phrase    = s.phrase;
+      d.phrase = s.phrase;
       d.transpose = s.transpose;
       for (int i = 0; i < s.fx.length && i < d.fx.length; i++) {
-        d.fx[i].name  = s.fx[i].name;
+        d.fx[i].name = s.fx[i].name;
         d.fx[i].value = s.fx[i].value;
       }
     } else if (currentWindow == 2) {
       final s = phrases[activePhraseIdx].steps[src];
       final d = phrases[activePhraseIdx].steps[dest];
-      d.note       = s.note;
+      d.note = s.note;
       d.instrument = s.instrument;
-      d.volume     = s.volume;
+      d.volume = s.volume;
       for (int i = 0; i < s.fx.length && i < d.fx.length; i++) {
-        d.fx[i].name  = s.fx[i].name;
+        d.fx[i].name = s.fx[i].name;
         d.fx[i].value = s.fx[i].value;
       }
     }
@@ -687,15 +732,21 @@ class TrackerModel {
       }
     } else if (currentWindow == 1) {
       final item = chains[activeChainIdx].items[row];
-      item.phrase    = 0;
+      item.phrase = 0;
       item.transpose = 0;
-      for (final f in item.fx) { f.name = '---'; f.value = 0; }
+      for (final f in item.fx) {
+        f.name = '---';
+        f.value = 0;
+      }
     } else if (currentWindow == 2) {
       final step = phrases[activePhraseIdx].steps[row];
-      step.note       = PhraseStep.noteNone;
+      step.note = PhraseStep.noteNone;
       step.instrument = 0;
-      step.volume     = 80;
-      for (final f in step.fx) { f.name = '---'; f.value = 0; }
+      step.volume = 80;
+      for (final f in step.fx) {
+        f.name = '---';
+        f.value = 0;
+      }
     }
   }
 
@@ -710,7 +761,7 @@ class TrackerModel {
     }
     _clearRow(maxR);
     lineSelStart = lineSelStart! - 1;
-    lineSelEnd   = (lineSelEnd ?? lineSelStart! + 1) - 1;
+    lineSelEnd = (lineSelEnd ?? lineSelStart! + 1) - 1;
   }
 
   /// Move selected lines down by one row (blocked if row below is occupied).
@@ -724,7 +775,7 @@ class TrackerModel {
     }
     _clearRow(minR);
     lineSelStart = lineSelStart! + 1;
-    lineSelEnd   = (lineSelEnd ?? lineSelStart! - 1) + 1;
+    lineSelEnd = (lineSelEnd ?? lineSelStart! - 1) + 1;
   }
 
   /// Duplicate selected lines into the rows immediately below (if space).
@@ -795,8 +846,8 @@ class TrackerModel {
         final isValue = (cursorCol - 2) % 2 == 1;
         if (fxIndex < chains[activeChainIdx].items[cursorRow].fx.length) {
           if (isValue) {
-            chains[activeChainIdx].items[cursorRow].fx[fxIndex].value =
-                intValue.clamp(0, 99);
+            chains[activeChainIdx].items[cursorRow].fx[fxIndex].value = intValue
+                .clamp(0, 99);
           }
           // FX name is set via the FX command picker, not free numeric entry
         }
@@ -817,9 +868,10 @@ class TrackerModel {
         // FX columns: col 3=FX1 name, 4=FX1 val, 5=FX2 name, 6=FX2 val
         final fxIndex = (cursorCol - 3) ~/ 2;
         final isValue = (cursorCol - 3) % 2 == 1;
-        if (isValue && fxIndex < phrases[activePhraseIdx].steps[cursorRow].fx.length) {
-          phrases[activePhraseIdx].steps[cursorRow].fx[fxIndex].value =
-              intValue.clamp(0, 99);
+        if (isValue &&
+            fxIndex < phrases[activePhraseIdx].steps[cursorRow].fx.length) {
+          phrases[activePhraseIdx].steps[cursorRow].fx[fxIndex].value = intValue
+              .clamp(0, 99);
         }
       }
     } else if (currentWindow == 3) {
@@ -828,10 +880,14 @@ class TrackerModel {
       var inst = instruments[cursorRow];
       if (cursorCol == 3) {
         inst.filter = intValue;
-      } else if (cursorCol == 4) inst.resonance = intValue;
-      else if (cursorCol == 5) inst.treble = intValue;
-      else if (cursorCol == 6) inst.mid = intValue;
-      else if (cursorCol == 7) inst.bass = intValue;
+      } else if (cursorCol == 4)
+        inst.resonance = intValue;
+      else if (cursorCol == 5)
+        inst.treble = intValue;
+      else if (cursorCol == 6)
+        inst.mid = intValue;
+      else if (cursorCol == 7)
+        inst.bass = intValue;
     } else if (currentWindow == 4) {
       // Mixer: LVL / RVB / DLY / CHO (rows) x CH 01-08 (columns)
       // All values 0-99
@@ -860,7 +916,10 @@ class TrackerModel {
     final now = DateTime.now();
     final elapsed = now.difference(lastClickTime).inMilliseconds;
 
-    if (lastClickedRow == row && lastClickedCol == col && lastClickedWindow == window && elapsed < doubleClickThreshold) {
+    if (lastClickedRow == row &&
+        lastClickedCol == col &&
+        lastClickedWindow == window &&
+        elapsed < doubleClickThreshold) {
       return true;
     }
 
@@ -910,18 +969,25 @@ class TrackerModel {
       var inst = instruments[cursorRow];
       if (cursorCol == 3) {
         inst.filter = 1;
-      } else if (cursorCol == 4) inst.resonance = 1;
-      else if (cursorCol == 5) inst.treble = 1;
-      else if (cursorCol == 6) inst.mid = 1;
-      else if (cursorCol == 7) inst.bass = 1;
+      } else if (cursorCol == 4)
+        inst.resonance = 1;
+      else if (cursorCol == 5)
+        inst.treble = 1;
+      else if (cursorCol == 6)
+        inst.mid = 1;
+      else if (cursorCol == 7)
+        inst.bass = 1;
     } else if (currentWindow == 4) {
       // Mixer: 80
       var ch = mixerChannels[cursorCol];
       if (cursorRow == 0) {
         ch.level = 80;
-      } else if (cursorRow == 1) ch.reverbSend = 80;
-      else if (cursorRow == 2) ch.delaySend = 80;
-      else if (cursorRow == 3) ch.chorusSend = 80;
+      } else if (cursorRow == 1)
+        ch.reverbSend = 80;
+      else if (cursorRow == 2)
+        ch.delaySend = 80;
+      else if (cursorRow == 3)
+        ch.chorusSend = 80;
     }
 
     editMenuVisible = true;
@@ -977,19 +1043,23 @@ class TrackerModel {
         // Phrase note column: empty = noteNone (-1), not MIDI note 0
         phrases[activePhraseIdx].steps[cursorRow].note = PhraseStep.noteNone;
         exitEditMode();
-      } else if (currentWindow == 1 && cursorCol >= 2 && (cursorCol - 2) % 2 == 0) {
+      } else if (currentWindow == 1 &&
+          cursorCol >= 2 &&
+          (cursorCol - 2) % 2 == 0) {
         // Chain FX name column (col 2 or 4): reset to '---' + clear value
         final fxIndex = (cursorCol - 2) ~/ 2;
         if (fxIndex < chains[activeChainIdx].items[cursorRow].fx.length) {
-          chains[activeChainIdx].items[cursorRow].fx[fxIndex].name  = '---';
+          chains[activeChainIdx].items[cursorRow].fx[fxIndex].name = '---';
           chains[activeChainIdx].items[cursorRow].fx[fxIndex].value = 0;
         }
         exitEditMode();
-      } else if (currentWindow == 2 && cursorCol >= 3 && (cursorCol - 3) % 2 == 0) {
+      } else if (currentWindow == 2 &&
+          cursorCol >= 3 &&
+          (cursorCol - 3) % 2 == 0) {
         // Phrase FX name column (col 3 or 5): reset to '---' + clear value
         final fxIndex = (cursorCol - 3) ~/ 2;
         if (fxIndex < phrases[activePhraseIdx].steps[cursorRow].fx.length) {
-          phrases[activePhraseIdx].steps[cursorRow].fx[fxIndex].name  = '---';
+          phrases[activePhraseIdx].steps[cursorRow].fx[fxIndex].name = '---';
           phrases[activePhraseIdx].steps[cursorRow].fx[fxIndex].value = 0;
         }
         exitEditMode();
@@ -1008,7 +1078,8 @@ class TrackerModel {
     } else if (action == 'CLO') {
       if (currentWindow == 0) {
         replicateChain();
-      } else if (currentWindow == 1) replicatePhrase();
+      } else if (currentWindow == 1)
+        replicatePhrase();
     } else if (action == 'OFF') {
       // Note off marker — only meaningful in phrase note column
       if (currentWindow == 2 && cursorCol == 0) {
@@ -1063,7 +1134,10 @@ class TrackerModel {
     int startRow = -1;
     for (int r = endRow - 2; r >= 0; r--) {
       if (slot >= ph.steps[r].fx.length) continue;
-      if (ph.steps[r].fx[slot].name == targetName) { startRow = r; break; }
+      if (ph.steps[r].fx[slot].name == targetName) {
+        startRow = r;
+        break;
+      }
     }
     if (startRow < 0) return;
     final startVal = ph.steps[startRow].fx[slot].value;
@@ -1071,7 +1145,7 @@ class TrackerModel {
     for (int r = startRow + 1; r < endRow; r++) {
       final t = (r - startRow) / span;
       final v = (startVal + (endVal - startVal) * t).round().clamp(0, 99);
-      ph.steps[r].fx[slot].name  = targetName;
+      ph.steps[r].fx[slot].name = targetName;
       ph.steps[r].fx[slot].value = v;
     }
   }
@@ -1081,12 +1155,15 @@ class TrackerModel {
       return song.chains[cursorRow][cursorCol];
     } else if (currentWindow == 1) {
       if (cursorCol == 0) return chains[activeChainIdx].items[cursorRow].phrase;
-      if (cursorCol == 1) return chains[activeChainIdx].items[cursorRow].transpose;
+      if (cursorCol == 1)
+        return chains[activeChainIdx].items[cursorRow].transpose;
       // FX cols: 2=FX1 name, 3=FX1 val, 4=FX2 name, 5=FX2 val
       final fxIndex = (cursorCol - 2) ~/ 2;
       final isValue = (cursorCol - 2) % 2 == 1;
       if (fxIndex < chains[activeChainIdx].items[cursorRow].fx.length) {
-        return isValue ? chains[activeChainIdx].items[cursorRow].fx[fxIndex].value : 0;
+        return isValue
+            ? chains[activeChainIdx].items[cursorRow].fx[fxIndex].value
+            : 0;
       }
       return 0;
     } else if (currentWindow == 2) {
@@ -1100,24 +1177,33 @@ class TrackerModel {
         int fxIndex = (cursorCol - 3) ~/ 2;
         int isValue = (cursorCol - 3) % 2;
         if (fxIndex < phrases[activePhraseIdx].steps[cursorRow].fx.length) {
-          return isValue == 1 ? phrases[activePhraseIdx].steps[cursorRow].fx[fxIndex].value : 0;
+          return isValue == 1
+              ? phrases[activePhraseIdx].steps[cursorRow].fx[fxIndex].value
+              : 0;
         }
       }
     } else if (currentWindow == 3) {
       var inst = instruments[cursorRow];
       if (cursorCol == 3) {
         return inst.filter;
-      } else if (cursorCol == 4) return inst.resonance;
-      else if (cursorCol == 5) return inst.treble;
-      else if (cursorCol == 6) return inst.mid;
-      else if (cursorCol == 7) return inst.bass;
+      } else if (cursorCol == 4)
+        return inst.resonance;
+      else if (cursorCol == 5)
+        return inst.treble;
+      else if (cursorCol == 6)
+        return inst.mid;
+      else if (cursorCol == 7)
+        return inst.bass;
     } else if (currentWindow == 4) {
       var ch = mixerChannels[cursorCol];
       if (cursorRow == 0) {
         return ch.level;
-      } else if (cursorRow == 1) return ch.reverbSend;
-      else if (cursorRow == 2) return ch.delaySend;
-      else if (cursorRow == 3) return ch.chorusSend;
+      } else if (cursorRow == 1)
+        return ch.reverbSend;
+      else if (cursorRow == 2)
+        return ch.delaySend;
+      else if (cursorRow == 3)
+        return ch.chorusSend;
     }
     return 0;
   }
@@ -1194,7 +1280,11 @@ class TrackerModel {
     return SamplerParams.empty();
   }
 
-  void setSamplerSample(int instrumentIndex, String samplePath, String sampleName) {
+  void setSamplerSample(
+    int instrumentIndex,
+    String samplePath,
+    String sampleName,
+  ) {
     if (instrumentIndex >= 0 && instrumentIndex < instruments.length) {
       final sampler = instruments[instrumentIndex].sampler;
       sampler.samplePath = samplePath;
@@ -1258,7 +1348,7 @@ class TrackerModel {
     if (swing == 50) return base; // straight — no math needed
     final int totalPair = base * 2;
     final int lineA = (base * swing / 50.0).round(); // downbeat (even)
-    final int lineB = totalPair - lineA;               // upbeat (odd)
+    final int lineB = totalPair - lineA; // upbeat (odd)
     return stepIndex.isEven ? lineA : lineB;
   }
 
@@ -1266,27 +1356,38 @@ class TrackerModel {
   // Build C++ rows for a single chain (chain view playback).
   // Plays chain [chainIdx] on track 0; tracks 1-7 are silent.
   // -----------------------------------------------------------------------
-  ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap})
-      buildChainData(int chainIdx, {int startSlot = 0}) {
-    final rows          = <Map<String, dynamic>>[];
-    final songRowMap    = <int>[];
-    final chainRowMap   = <int>[];
+  ({
+    List<Map<String, dynamic>> rows,
+    List<int> songRowMap,
+    List<int> chainRowMap,
+    List<int> phraseStepMap,
+  })
+  buildChainData(int chainIdx, {int startSlot = 0}) {
+    final rows = <Map<String, dynamic>>[];
+    final songRowMap = <int>[];
+    final chainRowMap = <int>[];
     final phraseStepMap = <int>[];
 
     int currentBpm = song.bpm;
     int currentLpb = song.lpb;
     final rng = Random();
 
-    final chainItems = chains[chainIdx].items.where((ci) => ci.phrase != 0).toList();
-    final clampedStart = startSlot.clamp(0, chainItems.isEmpty ? 0 : chainItems.length - 1);
+    final chainItems = chains[chainIdx].items
+        .where((ci) => ci.phrase != 0)
+        .toList();
+    final clampedStart = startSlot.clamp(
+      0,
+      chainItems.isEmpty ? 0 : chainItems.length - 1,
+    );
     for (int slot = clampedStart; slot < chainItems.length; slot++) {
       final ci = chainItems[slot];
       for (final fx in ci.fx) {
         if (fx.name == 'BPM') {
-          currentBpm = fxValToBpm(fx.value);
-        } else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
+          currentBpm = (currentBpm + fxBpmOffset(fx.value)).clamp(20, 300);
+        } else if (fx.name == 'LPB')
+          currentLpb = fx.value.clamp(1, 16);
       }
-      final ph  = phrases[ci.phrase - 1];
+      final ph = phrases[ci.phrase - 1];
       final len = _getPhraseLen(ph);
       if (len == 0) continue;
 
@@ -1295,55 +1396,87 @@ class TrackerModel {
         if (ps.note == PhraseStep.noteEnd) break;
         for (final fx in ps.fx) {
           if (fx.name == 'BPM') {
-            currentBpm = fxValToBpm(fx.value);
-          } else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
+            currentBpm = (currentBpm + fxBpmOffset(fx.value)).clamp(20, 300);
+          } else if (fx.name == 'LPB')
+            currentLpb = fx.value.clamp(1, 16);
         }
-        final int lineSamples = _swingLineSamples(currentBpm, currentLpb, rows.length);
+        final int lineSamples = _swingLineSamples(
+          currentBpm,
+          currentLpb,
+          rows.length,
+        );
 
         int instrIdx = ps.instrument > 0 ? ps.instrument - 1 : -1;
         int midiNote = ps.note;
         if (instrIdx >= 0 && midiNote >= 0 && ci.transpose != 0) {
-          final int semitones = ci.transpose <= 12 ? ci.transpose : ci.transpose - 100;
+          final int semitones = ci.transpose <= 12
+              ? ci.transpose
+              : ci.transpose - 100;
           midiNote = (midiNote + semitones).clamp(0, 120);
         }
         // Slice mode: C-0 to B-0 (MIDI 0-11) routes to instruments 1-12 at unity pitch
-        if (midiNote >= 0 && midiNote <= 11) { instrIdx = midiNote; midiNote = 60; }
+        if (midiNote >= 0 && midiNote <= 11) {
+          instrIdx = midiNote;
+          midiNote = 60;
+        }
 
         // CHA: probabilistic note skip (same logic as song/chain playback)
         if (instrIdx >= 0) {
           for (final fx in ps.fx) {
             if (fx.name == 'CHA') {
-              if (rng.nextInt(100) >= fx.value) { instrIdx = -1; midiNote = -1; }
+              if (rng.nextInt(100) >= fx.value) {
+                instrIdx = -1;
+                midiNote = -1;
+              }
               break;
             }
           }
         }
 
-        final fxIds  = [0, 0, 0];
+        final fxIds = [0, 0, 0];
         final fxVals = [0, 0, 0];
         for (int i = 0; i < ps.fx.length && i < 3; i++) {
-          fxIds[i]  = _fxIdForC(ps.fx[i].name);
+          fxIds[i] = _fxIdForC(ps.fx[i].name);
           fxVals[i] = ps.fx[i].value;
         }
         final noteData = <int>[instrIdx, midiNote, ps.volume];
-        for (int i = 0; i < 3; i++) { noteData.add(fxIds[i]); noteData.add(fxVals[i]); }
-        for (int t = 1; t < 8; t++) { noteData.addAll([-1, -1, -1, 0, 0, 0, 0, 0, 0]); }
+        for (int i = 0; i < 3; i++) {
+          noteData.add(fxIds[i]);
+          noteData.add(fxVals[i]);
+        }
+        for (int t = 1; t < 8; t++) {
+          noteData.addAll([-1, -1, -1, 0, 0, 0, 0, 0, 0]);
+        }
 
-        rows.add({'lineSamples': lineSamples, 'noteData': noteData});
+        rows.add({
+          'lineSamples': lineSamples,
+          'noteData': noteData,
+          'bpm': currentBpm,
+        });
         songRowMap.add(0);
         chainRowMap.add(slot);
         phraseStepMap.add(step);
       }
     }
-    return (rows: rows, songRowMap: songRowMap, chainRowMap: chainRowMap, phraseStepMap: phraseStepMap);
+    return (
+      rows: rows,
+      songRowMap: songRowMap,
+      chainRowMap: chainRowMap,
+      phraseStepMap: phraseStepMap,
+    );
   }
 
   // -----------------------------------------------------------------------
   // Build C++ rows for a single phrase (phrase view playback).
   // trackIdx (0-7) routes audio through the correct mixer channel.
   // -----------------------------------------------------------------------
-  ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap})
-      buildPhraseData(int phraseIdx, {int trackIdx = 0}) {
+  ({
+    List<Map<String, dynamic>> rows,
+    List<int> songRowMap,
+    List<int> chainRowMap,
+    List<int> phraseStepMap,
+  })
+  buildPhraseData(int phraseIdx, {int trackIdx = 0}) {
     final rows = buildPhraseRows(phraseIdx, trackIdx: trackIdx);
     final n = rows.length;
     return (
@@ -1360,15 +1493,25 @@ class TrackerModel {
   // chain decides the total number of slots. Shorter phrases inside a slot
   // also loop by modulo so the longest phrase drives that slot's step count.
   // -----------------------------------------------------------------------
-  ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap})
-      buildSongRowData(int songRow, {int? limitSlots}) {
-    final rows          = <Map<String, dynamic>>[];
-    final songRowMap    = <int>[];
-    final chainRowMap   = <int>[];
+  ({
+    List<Map<String, dynamic>> rows,
+    List<int> songRowMap,
+    List<int> chainRowMap,
+    List<int> phraseStepMap,
+  })
+  buildSongRowData(int songRow, {int? limitSlots}) {
+    final rows = <Map<String, dynamic>>[];
+    final songRowMap = <int>[];
+    final chainRowMap = <int>[];
     final phraseStepMap = <int>[];
 
     if (isSongRowEmpty(songRow)) {
-      return (rows: rows, songRowMap: songRowMap, chainRowMap: chainRowMap, phraseStepMap: phraseStepMap);
+      return (
+        rows: rows,
+        songRowMap: songRowMap,
+        chainRowMap: chainRowMap,
+        phraseStepMap: phraseStepMap,
+      );
     }
 
     int currentBpm = song.bpm;
@@ -1383,8 +1526,13 @@ class TrackerModel {
 
     // Use the longest chain unless a limit is given (e.g. chain view caps at
     // the viewed chain's own length so the playhead doesn't overrun it).
-    final rawMaxSlots = trackItems.fold(0, (m, l) => l.length > m ? l.length : m);
-    final maxSlots = limitSlots != null ? rawMaxSlots.clamp(0, limitSlots) : rawMaxSlots;
+    final rawMaxSlots = trackItems.fold(
+      0,
+      (m, l) => l.length > m ? l.length : m,
+    );
+    final maxSlots = limitSlots != null
+        ? rawMaxSlots.clamp(0, limitSlots)
+        : rawMaxSlots;
 
     for (int slot = 0; slot < maxSlots; slot++) {
       // Chain-level FX: BPM and LPB
@@ -1393,8 +1541,9 @@ class TrackerModel {
         final ci = trackItems[t][slot % trackItems[t].length];
         for (final fx in ci.fx) {
           if (fx.name == 'BPM') {
-            currentBpm = fxValToBpm(fx.value);
-          } else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
+            currentBpm = (currentBpm + fxBpmOffset(fx.value)).clamp(20, 300);
+          } else if (fx.name == 'LPB')
+            currentLpb = fx.value.clamp(1, 16);
         }
       }
 
@@ -1418,12 +1567,17 @@ class TrackerModel {
           final ps = ph.steps[step % phraseLen];
           for (final fx in ps.fx) {
             if (fx.name == 'BPM') {
-              currentBpm = fxValToBpm(fx.value);
-            } else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
+              currentBpm = (currentBpm + fxBpmOffset(fx.value)).clamp(20, 300);
+            } else if (fx.name == 'LPB')
+              currentLpb = fx.value.clamp(1, 16);
           }
         }
 
-        final int lineSamples = _swingLineSamples(currentBpm, currentLpb, rows.length);
+        final int lineSamples = _swingLineSamples(
+          currentBpm,
+          currentLpb,
+          rows.length,
+        );
         final noteData = <int>[];
 
         for (int t = 0; t < 8; t++) {
@@ -1434,23 +1588,34 @@ class TrackerModel {
           final ci = trackItems[t][slot % trackItems[t].length];
           final ph = phrases[ci.phrase - 1];
           final phraseLen = _getPhraseLen(ph);
-          if (phraseLen == 0) { noteData.addAll([-1, -1, -1, 0, 0, 0, 0, 0, 0]); continue; }
+          if (phraseLen == 0) {
+            noteData.addAll([-1, -1, -1, 0, 0, 0, 0, 0, 0]);
+            continue;
+          }
           final ps = ph.steps[step % phraseLen];
 
           int instrIdx = ps.instrument > 0 ? ps.instrument - 1 : -1;
           int midiNote = ps.note;
 
           if (instrIdx >= 0 && midiNote >= 0 && ci.transpose != 0) {
-            final int semitones = ci.transpose <= 12 ? ci.transpose : ci.transpose - 100;
+            final int semitones = ci.transpose <= 12
+                ? ci.transpose
+                : ci.transpose - 100;
             midiNote = (midiNote + semitones).clamp(0, 120);
           }
           // Slice mode: C-0 to B-0 (MIDI 0-11) routes to instruments 1-12 at unity pitch
-          if (midiNote >= 0 && midiNote <= 11) { instrIdx = midiNote; midiNote = 60; }
+          if (midiNote >= 0 && midiNote <= 11) {
+            instrIdx = midiNote;
+            midiNote = 60;
+          }
 
           if (instrIdx >= 0) {
             for (final fx in ps.fx) {
               if (fx.name == 'CHA') {
-                if (rng.nextInt(100) >= fx.value) { instrIdx = -1; midiNote = -1; }
+                if (rng.nextInt(100) >= fx.value) {
+                  instrIdx = -1;
+                  midiNote = -1;
+                }
                 break;
               }
             }
@@ -1460,17 +1625,21 @@ class TrackerModel {
           for (final cfx in ci.fx) {
             if (cfx.name == 'VOL') {
               chainVol = cfx.value;
-            } else if (cfx.name == 'PAN') chainPan = cfx.value;
-            else if (cfx.name == 'SNR') chainSnr = cfx.value;
-            else if (cfx.name == 'SND') chainSnd = cfx.value;
-            else if (cfx.name == 'SNC') chainSnc = cfx.value;
+            } else if (cfx.name == 'PAN')
+              chainPan = cfx.value;
+            else if (cfx.name == 'SNR')
+              chainSnr = cfx.value;
+            else if (cfx.name == 'SND')
+              chainSnd = cfx.value;
+            else if (cfx.name == 'SNC')
+              chainSnc = cfx.value;
           }
 
           final packedVol = chainVol ?? ps.volume;
-          final fxIds  = [0, 0, 0];
+          final fxIds = [0, 0, 0];
           final fxVals = [0, 0, 0];
           for (int i = 0; i < ps.fx.length && i < 3; i++) {
-            fxIds[i]  = _fxIdForC(ps.fx[i].name);
+            fxIds[i] = _fxIdForC(ps.fx[i].name);
             fxVals[i] = ps.fx[i].value;
           }
           for (final entry in [
@@ -1479,24 +1648,38 @@ class TrackerModel {
             (kFxId['SND'], chainSnd),
             (kFxId['SNC'], chainSnc),
           ]) {
-            final id = entry.$1; final val = entry.$2;
+            final id = entry.$1;
+            final val = entry.$2;
             if (id == null || val == null || fxIds.contains(id)) continue;
             final emptyIdx = fxIds.indexOf(0);
             if (emptyIdx == -1) break;
-            fxIds[emptyIdx] = id; fxVals[emptyIdx] = val;
+            fxIds[emptyIdx] = id;
+            fxVals[emptyIdx] = val;
           }
           noteData.addAll([instrIdx, midiNote, packedVol]);
-          for (int i = 0; i < 3; i++) { noteData.add(fxIds[i]); noteData.add(fxVals[i]); }
+          for (int i = 0; i < 3; i++) {
+            noteData.add(fxIds[i]);
+            noteData.add(fxVals[i]);
+          }
         }
 
-        rows.add({'lineSamples': lineSamples, 'noteData': noteData});
+        rows.add({
+          'lineSamples': lineSamples,
+          'noteData': noteData,
+          'bpm': currentBpm,
+        });
         songRowMap.add(songRow);
         chainRowMap.add(slot);
         phraseStepMap.add(step);
       }
     }
 
-    return (rows: rows, songRowMap: songRowMap, chainRowMap: chainRowMap, phraseStepMap: phraseStepMap);
+    return (
+      rows: rows,
+      songRowMap: songRowMap,
+      chainRowMap: chainRowMap,
+      phraseStepMap: phraseStepMap,
+    );
   }
 
   // -----------------------------------------------------------------------
@@ -1517,12 +1700,20 @@ class TrackerModel {
     return kFxId[name] ?? 0;
   }
 
-  ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap})
-      buildPlaybackData({int startRow = 0}) {
-    final rows          = <Map<String, dynamic>>[];
-    final songRowMap    = <int>[];  // parallel: rows[i] belongs to song row songRowMap[i]
-    final chainRowMap   = <int>[];  // parallel: rows[i] belongs to chain slot chainRowMap[i]
-    final phraseStepMap = <int>[];  // parallel: rows[i] belongs to phrase step phraseStepMap[i]
+  ({
+    List<Map<String, dynamic>> rows,
+    List<int> songRowMap,
+    List<int> chainRowMap,
+    List<int> phraseStepMap,
+  })
+  buildPlaybackData({int startRow = 0}) {
+    final rows = <Map<String, dynamic>>[];
+    final songRowMap =
+        <int>[]; // parallel: rows[i] belongs to song row songRowMap[i]
+    final chainRowMap =
+        <int>[]; // parallel: rows[i] belongs to chain slot chainRowMap[i]
+    final phraseStepMap =
+        <int>[]; // parallel: rows[i] belongs to phrase step phraseStepMap[i]
 
     int currentBpm = song.bpm;
     int currentLpb = song.lpb;
@@ -1535,10 +1726,15 @@ class TrackerModel {
       final trackItems = List<List<ChainItem>>.generate(8, (t) {
         final chainRef = song.chains[songRow][t];
         if (chainRef == 0) return [];
-        return chains[chainRef - 1].items.where((ci) => ci.phrase != 0).toList();
+        return chains[chainRef - 1].items
+            .where((ci) => ci.phrase != 0)
+            .toList();
       });
 
-      final maxSlots = trackItems.fold(0, (m, l) => l.length > m ? l.length : m);
+      final maxSlots = trackItems.fold(
+        0,
+        (m, l) => l.length > m ? l.length : m,
+      );
       if (maxSlots == 0) continue;
 
       for (int slot = 0; slot < maxSlots; slot++) {
@@ -1548,8 +1744,9 @@ class TrackerModel {
           final ci = trackItems[t][slot % trackItems[t].length];
           for (final fx in ci.fx) {
             if (fx.name == 'BPM') {
-              currentBpm = fxValToBpm(fx.value);
-            } else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
+              currentBpm = (currentBpm + fxBpmOffset(fx.value)).clamp(20, 300);
+            } else if (fx.name == 'LPB')
+              currentLpb = fx.value.clamp(1, 16);
             // HOP: non-linear chain jump — TODO
           }
         }
@@ -1575,12 +1772,20 @@ class TrackerModel {
             final ps = ph.steps[step % phraseLen];
             for (final fx in ps.fx) {
               if (fx.name == 'BPM') {
-                currentBpm = fxValToBpm(fx.value);
-              } else if (fx.name == 'LPB') currentLpb = fx.value.clamp(1, 16);
+                currentBpm = (currentBpm + fxBpmOffset(fx.value)).clamp(
+                  20,
+                  300,
+                );
+              } else if (fx.name == 'LPB')
+                currentLpb = fx.value.clamp(1, 16);
             }
           }
 
-          final int lineSamples = _swingLineSamples(currentBpm, currentLpb, rows.length);
+          final int lineSamples = _swingLineSamples(
+            currentBpm,
+            currentLpb,
+            rows.length,
+          );
 
           final noteData = <int>[];
           for (int t = 0; t < 8; t++) {
@@ -1609,13 +1814,19 @@ class TrackerModel {
               midiNote = (midiNote + semitones).clamp(0, 120);
             }
             // Slice mode: C-0 to B-0 (MIDI 0-11) routes to instruments 1-12 at unity pitch
-            if (midiNote >= 0 && midiNote <= 11) { instrIdx = midiNote; midiNote = 60; }
+            if (midiNote >= 0 && midiNote <= 11) {
+              instrIdx = midiNote;
+              midiNote = 60;
+            }
 
             // CHA: probabilistic note skip
             if (instrIdx >= 0) {
               for (final fx in ps.fx) {
                 if (fx.name == 'CHA') {
-                  if (rng.nextInt(100) >= fx.value) { instrIdx = -1; midiNote = -1; }
+                  if (rng.nextInt(100) >= fx.value) {
+                    instrIdx = -1;
+                    midiNote = -1;
+                  }
                   break;
                 }
               }
@@ -1627,10 +1838,14 @@ class TrackerModel {
             for (final cfx in ci.fx) {
               if (cfx.name == 'VOL') {
                 chainVol = cfx.value;
-              } else if (cfx.name == 'PAN') chainPan = cfx.value;
-              else if (cfx.name == 'SNR') chainSnr = cfx.value;
-              else if (cfx.name == 'SND') chainSnd = cfx.value;
-              else if (cfx.name == 'SNC') chainSnc = cfx.value;
+              } else if (cfx.name == 'PAN')
+                chainPan = cfx.value;
+              else if (cfx.name == 'SNR')
+                chainSnr = cfx.value;
+              else if (cfx.name == 'SND')
+                chainSnd = cfx.value;
+              else if (cfx.name == 'SNC')
+                chainSnc = cfx.value;
             }
 
             // Pack: [instrIdx, midiNote, vol, fx0id, fx0val, fx1id, fx1val, fx2id, fx2val]
@@ -1640,10 +1855,10 @@ class TrackerModel {
             // Fill FX slots from phrase step first (3 slots).
             // Then inject any chain FX into empty slots, skipping ones the
             // phrase already covers (phrase wins on conflict).
-            final fxIds  = [0, 0, 0];
+            final fxIds = [0, 0, 0];
             final fxVals = [0, 0, 0];
             for (int i = 0; i < ps.fx.length && i < 3; i++) {
-              fxIds[i]  = _fxIdForC(ps.fx[i].name);
+              fxIds[i] = _fxIdForC(ps.fx[i].name);
               fxVals[i] = ps.fx[i].value;
             }
             for (final entry in [
@@ -1652,11 +1867,13 @@ class TrackerModel {
               (kFxId['SND'], chainSnd),
               (kFxId['SNC'], chainSnc),
             ]) {
-              final id = entry.$1; final val = entry.$2;
+              final id = entry.$1;
+              final val = entry.$2;
               if (id == null || val == null || fxIds.contains(id)) continue;
               final emptyIdx = fxIds.indexOf(0);
               if (emptyIdx == -1) break;
-              fxIds[emptyIdx] = id; fxVals[emptyIdx] = val;
+              fxIds[emptyIdx] = id;
+              fxVals[emptyIdx] = val;
             }
             noteData.addAll([instrIdx, midiNote, packedVol]);
             for (int i = 0; i < 3; i++) {
@@ -1664,7 +1881,11 @@ class TrackerModel {
               noteData.add(fxVals[i]);
             }
           }
-          rows.add({'lineSamples': lineSamples, 'noteData': noteData});
+          rows.add({
+            'lineSamples': lineSamples,
+            'noteData': noteData,
+            'bpm': currentBpm,
+          });
           songRowMap.add(songRow);
           chainRowMap.add(slot);
           phraseStepMap.add(step);
@@ -1672,35 +1893,60 @@ class TrackerModel {
       }
     }
 
-    return (rows: rows, songRowMap: songRowMap, chainRowMap: chainRowMap, phraseStepMap: phraseStepMap);
+    return (
+      rows: rows,
+      songRowMap: songRowMap,
+      chainRowMap: chainRowMap,
+      phraseStepMap: phraseStepMap,
+    );
   }
 
   // -----------------------------------------------------------------------
   // Build C++ rows for a single phrase (Phrase window play).
   // Each step fires its instrument; all other tracks are silent.
   // -----------------------------------------------------------------------
-  List<Map<String, dynamic>> buildPhraseRows(int phraseIdx, {int trackIdx = 0}) {
-    final ph  = phrases[phraseIdx];
+  List<Map<String, dynamic>> buildPhraseRows(
+    int phraseIdx, {
+    int trackIdx = 0,
+  }) {
+    final ph = phrases[phraseIdx];
     final len = _getPhraseLen(ph);
     if (len == 0) return [];
 
     final rows = <Map<String, dynamic>>[];
-    final rng  = Random();
+    final rng = Random();
+    int currentBpm = song.bpm;
+    int currentLpb = song.lpb;
 
     for (int step = 0; step < len; step++) {
       final ps = ph.steps[step];
       if (ps.note == PhraseStep.noteEnd) break;
-      final int lineSamples = _swingLineSamples(song.bpm, song.lpb, step);
+
+      // Phrase-step BPM / LPB FX (relative tempo changes)
+      for (final fx in ps.fx) {
+        if (fx.name == 'BPM') {
+          currentBpm = (currentBpm + fxBpmOffset(fx.value)).clamp(20, 300);
+        } else if (fx.name == 'LPB')
+          currentLpb = fx.value.clamp(1, 16);
+      }
+
+      final int lineSamples = _swingLineSamples(currentBpm, currentLpb, step);
       int instrIdx = ps.instrument > 0 ? ps.instrument - 1 : -1;
       int midiNote = ps.note;
       // Slice mode: C-0 to B-0 (MIDI 0-11) routes to instruments 1-12 at unity pitch
-      if (midiNote >= 0 && midiNote <= 11) { instrIdx = midiNote; midiNote = 60; }
+      if (midiNote >= 0 && midiNote <= 11) {
+        instrIdx = midiNote;
+        midiNote = 60;
+      }
 
       // CHA: probabilistic note skip (same logic as song/chain playback)
       if (instrIdx >= 0) {
         for (final fx in ps.fx) {
           if (fx.name == 'CHA') {
-            if (rng.nextInt(100) >= fx.value) { instrIdx = -1; midiNote = -1; }
+            if (rng.nextInt(100) >= fx.value) {
+              instrIdx = -1;
+              midiNote = -1;
+            }
             break;
           }
         }
@@ -1724,7 +1970,11 @@ class TrackerModel {
           noteData.addAll([-1, -1, -1, 0, 0, 0, 0, 0, 0]);
         }
       }
-      rows.add({'lineSamples': lineSamples, 'noteData': noteData});
+      rows.add({
+        'lineSamples': lineSamples,
+        'noteData': noteData,
+        'bpm': currentBpm,
+      });
     }
 
     return rows;
@@ -1752,7 +2002,9 @@ class TrackerModel {
 
     // Compute total duration in seconds (48 kHz sample rate)
     final totalFrames = data.rows.fold<int>(
-        0, (sum, row) => sum + (row['lineSamples'] as int));
+      0,
+      (sum, row) => sum + (row['lineSamples'] as int),
+    );
     final totalSeconds = totalFrames / 48000.0;
     // Extra tail to capture reverb/delay decay
     const tailSeconds = 3.0;
@@ -1766,7 +2018,8 @@ class TrackerModel {
 
     // Wait for song duration + tail (delay/reverb decay)
     await Future<void>.delayed(
-        Duration(milliseconds: ((totalSeconds + tailSeconds) * 1000).round()));
+      Duration(milliseconds: ((totalSeconds + tailSeconds) * 1000).round()),
+    );
 
     // Stop playback
     isPlaying = false;
@@ -1779,9 +2032,10 @@ class TrackerModel {
 
     // Encode to WAV
     final wavBytes = WavEncoder.encodeWav(
-        samples: tap.samples,
-        sampleRate: tap.sampleRate,
-        numChannels: 2);
+      samples: tap.samples,
+      sampleRate: tap.sampleRate,
+      numChannels: 2,
+    );
 
     // Save next to project file (app-private storage)
     final fileName = '$currentProjectName.wav';
@@ -1790,7 +2044,9 @@ class TrackerModel {
 
     // Also copy to public Downloads so it appears in the Files app
     await NativeAudioEngine.saveToDownloads(
-        sourcePath: filePath, fileName: fileName);
+      sourcePath: filePath,
+      fileName: fileName,
+    );
 
     return filePath;
   }

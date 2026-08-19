@@ -27,42 +27,47 @@ class TrackerScreen extends StatefulWidget {
   State<TrackerScreen> createState() => _TrackerScreenState();
 }
 
-class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserver {
+class _TrackerScreenState extends State<TrackerScreen>
+    with WidgetsBindingObserver {
   late TrackerModel model;
   final List<String> windowNames = ['S', 'C', 'P', 'I', 'M'];
-  int _samplerInstrumentOpen = -1;  // -1 = no sampler open, >=0 = instrument index
+  int _samplerInstrumentOpen =
+      -1; // -1 = no sampler open, >=0 = instrument index
   Timer? _stepTimer;
   Timer? _meterTimer;
 
   // VU-meter values pushed to small, isolated listeners so the 80ms meter poll
   // and the playhead poll never trigger a full-screen rebuild.
-  final ValueNotifier<List<double>> _trackPeaksVN =
-      ValueNotifier<List<double>>(List.filled(8, 0.0));
+  final ValueNotifier<List<double>> _trackPeaksVN = ValueNotifier<List<double>>(
+    List.filled(8, 0.0),
+  );
   final ValueNotifier<double> _masterPeakVN = ValueNotifier<double>(0.0);
 
   // Playback tracking
-  List<int> _songRowMap    = [];  // C++ row index → song row number
-  List<int> _chainRowMap   = [];  // C++ row index → chain slot number
-  List<int> _phraseStepMap = [];  // C++ row index → phrase step number
-  int _currentStepIndex    = 0;   // current position in C++ queue
-  int _playbackWindow      = 0;   // window that triggered play (0=song, 1=chain, 2=phrase)
+  List<int> _songRowMap = []; // C++ row index → song row number
+  List<int> _chainRowMap = []; // C++ row index → chain slot number
+  List<int> _phraseStepMap = []; // C++ row index → phrase step number
+  List<int> _rowBpm = []; // C++ row index → running tempo for that row
+  int _currentStepIndex = 0; // current position in C++ queue
+  int _playbackWindow =
+      0; // window that triggered play (0=song, 1=chain, 2=phrase)
   Timer? _autoSaveTimer;
   final FocusNode _keyListenerFocusNode = FocusNode();
 
   // Saved song-view cursor — persists through instrument/mixer visits
-  int _songCursorRow       = 0;
-  int _songCursorCol       = 0;
-  bool _songCellWasEmpty   = true; // true when saved cell had no chain ref
+  int _songCursorRow = 0;
+  int _songCursorCol = 0;
+  bool _songCellWasEmpty = true; // true when saved cell had no chain ref
 
   // Saved chain-view cursor — persists through phrase/instrument/mixer visits
-  int _chainCursorRow      = 0;
-  int _chainCursorCol      = 0;
+  int _chainCursorRow = 0;
+  int _chainCursorCol = 0;
 
   // Saved chain index — persists when navigating from chain to phrase and back
-  int _savedChainIdx       = 0;
-  
+  int _savedChainIdx = 0;
+
   // Saved phrase index — persists when navigating from phrase to other views and back
-  int _savedPhraseIdx      = 0;
+  int _savedPhraseIdx = 0;
 
   @override
   void initState() {
@@ -75,7 +80,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     //   (_) => _autoSave(),
     // );
     // Poll native audio peaks for LED meters (~12.5 fps)
-    _meterTimer = Timer.periodic(const Duration(milliseconds: 80), (_) => _pollMeters());
+    _meterTimer = Timer.periodic(
+      const Duration(milliseconds: 80),
+      (_) => _pollMeters(),
+    );
   }
 
   @override
@@ -124,13 +132,24 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       // Restore sampler params (start/end/attack/release/loop/pitch/vol)
       final s = instr.sampler;
       await NativeAudioEngine.setInstrumentPlaybackParams(
-        i, s.pitch, s.volume, s.start, s.end, s.attack, s.release, s.loopMode,
+        i,
+        s.pitch,
+        s.volume,
+        s.start,
+        s.end,
+        s.attack,
+        s.release,
+        s.loopMode,
       );
       // Engine resets on init — restore HP/LP filters too.
       await NativeAudioEngine.setInstrumentFilters(i, s.hpCutoff, s.lpCutoff);
       // Restore chord/unison layer 2+3 params too.
       await NativeAudioEngine.setInstrumentLayers(
-        i, s.layer2PitchCents, s.layer2Gain, s.layer3PitchCents, s.layer3Gain,
+        i,
+        s.layer2PitchCents,
+        s.layer2Gain,
+        s.layer3PitchCents,
+        s.layer3Gain,
       );
     }
     // Push current mixer + mute + master FX state to the engine.
@@ -179,7 +198,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
 
     final int nativeIdx = instIdx - 1; // instrument is 1-indexed in model
     final freq = 440.0 * math.pow(2.0, (noteVal - 69) / 12.0);
-    final vol  = step.volume > 0 ? step.volume / 99.0 : 0.8;
+    final vol = step.volume > 0 ? step.volume / 99.0 : 0.8;
 
     // Use sampler params so start/end/attack/release/loop are respected
     final s = model.instruments[nativeIdx].sampler;
@@ -189,9 +208,9 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       vol * s.volume,
       s.start,
       s.end,
-      attackTime:  s.attack,
+      attackTime: s.attack,
       releaseTime: s.release,
-      loopMode:    s.loopMode,
+      loopMode: s.loopMode,
     );
   }
 
@@ -200,8 +219,8 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     NativeAudioEngine.setReverbSize(fx.reverbSize);
     NativeAudioEngine.setReverbDamping(fx.reverbDamp);
     NativeAudioEngine.setReverbWidth(fx.reverbWidth);
-    final delayMs = (fx.delayLines / 100.0) * 60000.0 /
-        (model.song.bpm * model.song.lpb);
+    final delayMs =
+        (fx.delayLines / 100.0) * 60000.0 / (model.song.bpm * model.song.lpb);
     NativeAudioEngine.setDelayTimeMs(delayMs);
     NativeAudioEngine.setDelayFeedback(fx.delayFeedback);
     NativeAudioEngine.setChorusRate((fx.chorusRate - 0.1) / 4.9);
@@ -219,12 +238,13 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     NativeAudioEngine.setMasterVolume(fx.masterVolume);
   }
 
-  void _syncMixerSendsToNative() {    for (int i = 0; i < model.mixerChannels.length; i++) {
+  void _syncMixerSendsToNative() {
+    for (int i = 0; i < model.mixerChannels.length; i++) {
       final ch = model.mixerChannels[i];
       NativeAudioEngine.setTrackSends(
         i,
         ch.reverbSend / 99.0,
-        ch.delaySend  / 99.0,
+        ch.delaySend / 99.0,
         ch.chorusSend / 99.0,
       );
       NativeAudioEngine.setTrackLevel(i, ch.level / 99.0);
@@ -245,16 +265,20 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     final data = _playbackWindow == 2
         ? model.buildPhraseData(model.activePhraseIdx)
         : _playbackWindow == 1
-            ? model.buildSongRowData(model.playheadRow,
-                limitSlots: model.chains[model.activeChainIdx]
-                    .items.where((ci) => ci.phrase != 0).length)
-            : model.buildPlaybackData(startRow: model.playheadRow);
+        ? model.buildSongRowData(
+            model.playheadRow,
+            limitSlots: model.chains[model.activeChainIdx].items
+                .where((ci) => ci.phrase != 0)
+                .length,
+          )
+        : model.buildPlaybackData(startRow: model.playheadRow);
     if (data.rows.isEmpty) return;
     await NativeAudioEngine.clearQueue();
     await NativeAudioEngine.enqueueAllRows(model.isLooping, data.rows);
-    _songRowMap    = data.songRowMap;
-    _chainRowMap   = data.chainRowMap;
+    _songRowMap = data.songRowMap;
+    _chainRowMap = data.chainRowMap;
     _phraseStepMap = data.phraseStepMap;
+    _rowBpm = [for (final r in data.rows) (r['bpm'] as int?) ?? model.song.bpm];
     _currentStepIndex = 0;
   }
 
@@ -268,7 +292,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
           if (_songRowMap.isNotEmpty) {
             final nextIndex = _currentStepIndex + advanced;
             final wrapped = nextIndex % _songRowMap.length;
-            
+
             // If we wrapped AND loop is off, stop playback
             if (nextIndex >= _songRowMap.length && !model.isLooping) {
               model.stopPlayback();
@@ -276,11 +300,16 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
               _stepTimer = null;
               return;
             }
-            
+
             _currentStepIndex = wrapped;
-            model.playheadRow      = _songRowMap[_currentStepIndex];
+            model.playheadRow = _songRowMap[_currentStepIndex];
             model.playheadChainRow = _chainRowMap[_currentStepIndex];
-            model.phraseStep       = _phraseStepMap.isNotEmpty ? _phraseStepMap[_currentStepIndex] : 0;
+            model.phraseStep = _phraseStepMap.isNotEmpty
+                ? _phraseStepMap[_currentStepIndex]
+                : 0;
+            if (_rowBpm.isNotEmpty && _currentStepIndex < _rowBpm.length) {
+              model.displayBpm = _rowBpm[_currentStepIndex];
+            }
           }
         });
       }
@@ -302,13 +331,19 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     } else {
       model.startPlayback();
       _currentStepIndex = 0;
-      _playbackWindow   = model.currentWindow;
+      _playbackWindow = model.currentWindow;
 
       // Playback rules — all 8 tracks always play; Solo/Mute to isolate.
       //   Song view  → full song from cursor row; loop wraps to cursor row.
       //   Chain view → one song row, all 8 tracks, all slots; always loops from slot 0.
       //   Phrase view → this phrase solo, loop from step 0.
-      late final ({List<Map<String, dynamic>> rows, List<int> songRowMap, List<int> chainRowMap, List<int> phraseStepMap}) data;
+      late final ({
+        List<Map<String, dynamic>> rows,
+        List<int> songRowMap,
+        List<int> chainRowMap,
+        List<int> phraseStepMap,
+      })
+      data;
       int startOffset = 0;
 
       if (_playbackWindow == 2) {
@@ -316,7 +351,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         // Use _songCursorCol so the phrase routes through the correct mixer
         // channel (the track it belongs to in song view), preserving
         // reverb/delay/chorus sends and volume settings for that track.
-        data = model.buildPhraseData(model.activePhraseIdx, trackIdx: _songCursorCol);
+        data = model.buildPhraseData(
+          model.activePhraseIdx,
+          trackIdx: _songCursorCol,
+        );
       } else if (_playbackWindow == 1) {
         // Chain view: find the song row containing this chain, then build just
         // that one row (all 8 tracks, all chain slots, shorter chains loop).
@@ -325,7 +363,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         for (int r = 0; r < 99; r++) {
           if (model.isSongRowEmpty(r)) break;
           for (int t = 0; t < 8; t++) {
-            if (model.song.chains[r][t] == chainRef) { foundRow = r; break; }
+            if (model.song.chains[r][t] == chainRef) {
+              foundRow = r;
+              break;
+            }
           }
           if (foundRow >= 0) break;
         }
@@ -336,19 +377,23 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         }
         // Limit slots to the active chain's own length so the playhead
         // doesn't advance into slots that are empty in the viewed chain.
-        final activeChainSlots = model.chains[model.activeChainIdx]
-            .items.where((ci) => ci.phrase != 0).length;
+        final activeChainSlots = model.chains[model.activeChainIdx].items
+            .where((ci) => ci.phrase != 0)
+            .length;
         data = model.buildSongRowData(foundRow, limitSlots: activeChainSlots);
       } else {
         // Song view: full song, start at cursor row.
         data = model.buildPlaybackData(startRow: 0);
         for (int i = 0; i < data.songRowMap.length; i++) {
-          if (data.songRowMap[i] == model.cursorRow) { startOffset = i; break; }
+          if (data.songRowMap[i] == model.cursorRow) {
+            startOffset = i;
+            break;
+          }
         }
       }
 
-      _songRowMap    = data.songRowMap;
-      _chainRowMap   = data.chainRowMap;
+      _songRowMap = data.songRowMap;
+      _chainRowMap = data.chainRowMap;
       _phraseStepMap = data.phraseStepMap;
 
       // Rotate or trim based on loop state.
@@ -358,20 +403,32 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
           ...data.rows.sublist(startOffset),
           ...data.rows.sublist(0, startOffset),
         ];
-        _songRowMap    = [..._songRowMap.sublist(startOffset),    ..._songRowMap.sublist(0, startOffset)];
-        _chainRowMap   = [..._chainRowMap.sublist(startOffset),   ..._chainRowMap.sublist(0, startOffset)];
-        _phraseStepMap = [..._phraseStepMap.sublist(startOffset), ..._phraseStepMap.sublist(0, startOffset)];
+        _songRowMap = [
+          ..._songRowMap.sublist(startOffset),
+          ..._songRowMap.sublist(0, startOffset),
+        ];
+        _chainRowMap = [
+          ..._chainRowMap.sublist(startOffset),
+          ..._chainRowMap.sublist(0, startOffset),
+        ];
+        _phraseStepMap = [
+          ..._phraseStepMap.sublist(startOffset),
+          ..._phraseStepMap.sublist(0, startOffset),
+        ];
       } else if (!model.isLooping && startOffset > 0) {
-        playRows       = data.rows.sublist(startOffset);
-        _songRowMap    = _songRowMap.sublist(startOffset);
-        _chainRowMap   = _chainRowMap.sublist(startOffset);
+        playRows = data.rows.sublist(startOffset);
+        _songRowMap = _songRowMap.sublist(startOffset);
+        _chainRowMap = _chainRowMap.sublist(startOffset);
         _phraseStepMap = _phraseStepMap.sublist(startOffset);
       } else {
         playRows = data.rows;
       }
       _currentStepIndex = 0;
+      _rowBpm = [
+        for (final r in playRows) (r['bpm'] as int?) ?? model.song.bpm,
+      ];
 
-      model.playheadRow      = _playbackWindow == 0 ? model.cursorRow : 0;
+      model.playheadRow = _playbackWindow == 0 ? model.cursorRow : 0;
       model.playheadChainRow = 0;
 
       if (playRows.isEmpty) {
@@ -393,15 +450,16 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
 
     // ── Save cursor whenever leaving song or chain view ───────────────────
     if (fromWindow == 0) {
-      _songCursorRow    = model.cursorRow;
-      _songCursorCol    = model.cursorCol;
-      _songCellWasEmpty = model.song.chains[model.cursorRow][model.cursorCol] <= 0;
+      _songCursorRow = model.cursorRow;
+      _songCursorCol = model.cursorCol;
+      _songCellWasEmpty =
+          model.song.chains[model.cursorRow][model.cursorCol] <= 0;
     } else if (fromWindow == 1) {
-      _chainCursorRow   = model.cursorRow;
-      _chainCursorCol   = model.cursorCol;
-      _savedChainIdx    = model.activeChainIdx;
+      _chainCursorRow = model.cursorRow;
+      _chainCursorCol = model.cursorCol;
+      _savedChainIdx = model.activeChainIdx;
     } else if (fromWindow == 2) {
-      _savedPhraseIdx   = model.activePhraseIdx;
+      _savedPhraseIdx = model.activePhraseIdx;
     }
 
     // ── Forward navigation rules ─────────────────────────────────────────
@@ -440,8 +498,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         // If this chain has no valid phrase at all, block the jump.
         final chain = model.chains[model.activeChainIdx];
         final hasPhrase = chain.items.any((item) => item.phrase > 0);
-        if (!hasPhrase && model.phrases[_savedPhraseIdx].steps.every(
-              (s) => s.note == PhraseStep.noteNone)) {
+        if (!hasPhrase &&
+            model.phrases[_savedPhraseIdx].steps.every(
+              (s) => s.note == PhraseStep.noteNone,
+            )) {
           return;
         }
       } else if (fromWindow == 3 || fromWindow == 4) {
@@ -497,7 +557,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
           if (model.editingBPM) {
             setState(() {
               int bpm = int.tryParse(model.editBuffer) ?? 120;
-              bpm = bpm.clamp(60, 300);
+              bpm = bpm.clamp(20, 300);
               model.pushUndo();
               model.song.bpm = bpm;
               model.editingBPM = false;
@@ -527,10 +587,14 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       } else if (event.logicalKey == LogicalKeyboardKey.backspace) {
         if (model.inEditMode && model.editBuffer.isNotEmpty) {
           setState(() {
-            model.editBuffer = model.editBuffer.substring(0, model.editBuffer.length - 1);
+            model.editBuffer = model.editBuffer.substring(
+              0,
+              model.editBuffer.length - 1,
+            );
           });
         }
-      } else if (event.character != null && event.character!.contains(RegExp(r'[0-9]'))) {
+      } else if (event.character != null &&
+          event.character!.contains(RegExp(r'[0-9]'))) {
         if (model.inEditMode && model.editBuffer.length < model.editMaxChars) {
           setState(() {
             model.editBuffer += event.character!;
@@ -542,12 +606,18 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
 
   int _getMaxColumns(int window) {
     switch (window) {
-      case 0: return 8;  // Song: 8 tracks
-      case 1: return 6;  // Chain: PH, TR, FX, VL, FX, VL
-      case 2: return 8;  // Phrase: IN VOL FX VL FX VL FX VL
-      case 3: return 8;  // Instrument: LD ED RC FT RS TR MD BS
-      case 4: return 8;  // Mixer: 8 channels (rows = params)
-      default: return 1;
+      case 0:
+        return 8; // Song: 8 tracks
+      case 1:
+        return 6; // Chain: PH, TR, FX, VL, FX, VL
+      case 2:
+        return 8; // Phrase: IN VOL FX VL FX VL FX VL
+      case 3:
+        return 8; // Instrument: LD ED RC FT RS TR MD BS
+      case 4:
+        return 8; // Mixer: 8 channels (rows = params)
+      default:
+        return 1;
     }
   }
 
@@ -562,359 +632,445 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
           child: Stack(
             children: [
               Column(
-              children: [
-            // Navigation bar
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final fontSize = (constraints.maxWidth * 0.12).clamp(16.0, 32.0);
-                final buttonW = (constraints.maxWidth * 0.10).clamp(40.0, 80.0);
-                return Container(
-                  color: kBarBg,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Row(
-                        children: List.generate(
-                          windowNames.length * 2 - 1,
-                          (i) {
-                            if (i.isOdd) {
-                              // Spacer between buttons
-                              return SizedBox(width: buttonW);
-                            }
-                            final buttonIndex = i ~/ 2;
-                            return GestureDetector(
-                              behavior: HitTestBehavior.opaque,
+                children: [
+                  // Navigation bar
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final fontSize = (constraints.maxWidth * 0.12).clamp(
+                        16.0,
+                        32.0,
+                      );
+                      final buttonW = (constraints.maxWidth * 0.10).clamp(
+                        40.0,
+                        80.0,
+                      );
+                      return Container(
+                        color: kBarBg,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Row(
+                              children: List.generate(
+                                windowNames.length * 2 - 1,
+                                (i) {
+                                  if (i.isOdd) {
+                                    // Spacer between buttons
+                                    return SizedBox(width: buttonW);
+                                  }
+                                  final buttonIndex = i ~/ 2;
+                                  return GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onTap: () {
+                                      setState(() {
+                                        _navigateToWindow(buttonIndex);
+                                      });
+                                    },
+                                    child: Container(
+                                      width: buttonW,
+                                      height: 36,
+                                      decoration: BoxDecoration(
+                                        border: Border.all(
+                                          color:
+                                              model.currentWindow == buttonIndex
+                                              ? kGreen
+                                              : Colors.white,
+                                          width: 2,
+                                        ),
+                                      ),
+                                      alignment: Alignment.center,
+                                      child: Text(
+                                        windowNames[buttonIndex],
+                                        style: trackerStyle(
+                                          size: fontSize,
+                                          color:
+                                              model.currentWindow == buttonIndex
+                                              ? kGreen
+                                              : Colors.white,
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                  // Spacer between nav and content (one line height)
+                  const SizedBox(height: 28),
+                  // Content area — Expanded fills exactly the remaining space, no overflow possible
+                  Expanded(child: _buildWindow()),
+                  // Spacer between content and mixer (one line height)
+                  const SizedBox(height: 28),
+                  // Simple mixer strip (persistent, shows meters and levels)
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final fontSize = (constraints.maxWidth * 0.08).clamp(
+                        16.0,
+                        32.0,
+                      );
+                      final meterWidth = (constraints.maxWidth / 8 * 0.4).clamp(
+                        20.0,
+                        40.0,
+                      );
+                      return Container(
+                        color: kBarBg,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                          vertical: 4,
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.start,
+                          children: [
+                            // Invisible spacer (for alignment)
+                            SizedBox(width: (constraints.maxWidth / 14)),
+                            ...List.generate(8, (ch) {
+                              final level = model.mixerChannels[ch].level;
+                              final bool isSoloed = model.soloedTracks.contains(
+                                ch,
+                              );
+                              return Expanded(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    // LED meter: 6 blocks × 5 dB, range −30..0 dB.
+                                    // Tap = toggle solo
+                                    GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onTap: () async {
+                                        model.toggleSolo(ch);
+                                        setState(() {});
+                                        _syncTrackMutesToNative();
+                                      },
+                                      child: RepaintBoundary(
+                                        child: ValueListenableBuilder<List<double>>(
+                                          valueListenable: _trackPeaksVN,
+                                          builder: (context, peaks, _) {
+                                            final double audioLevel =
+                                                ch < peaks.length
+                                                ? peaks[ch]
+                                                : 0.0;
+                                            final double dB = audioLevel > 1e-6
+                                                ? 20.0 *
+                                                      math.log(audioLevel) /
+                                                      math.ln10
+                                                : -60.0;
+                                            final Color borderColor = isSoloed
+                                                ? Colors.yellow
+                                                : Colors.white;
+                                            return Container(
+                                              width: meterWidth,
+                                              height: 40,
+                                              decoration: BoxDecoration(
+                                                border: Border.all(
+                                                  color: borderColor,
+                                                  width: isSoloed ? 2 : 1,
+                                                ),
+                                                color: Colors.black,
+                                              ),
+                                              padding: const EdgeInsets.all(2),
+                                              child: Stack(
+                                                children: [
+                                                  Column(
+                                                    mainAxisAlignment:
+                                                        MainAxisAlignment.end,
+                                                    children: List.generate(6, (
+                                                      i,
+                                                    ) {
+                                                      // i=0 = top block (−5..0 dB), i=5 = bottom (−30..−25 dB)
+                                                      final int blockIdx =
+                                                          5 - i;
+                                                      final double thresh =
+                                                          -30.0 +
+                                                          blockIdx * 5.0;
+                                                      final bool lit =
+                                                          dB >= thresh;
+                                                      final bool isHot =
+                                                          blockIdx == 5;
+                                                      return Container(
+                                                        width: double.infinity,
+                                                        height: 5,
+                                                        margin: EdgeInsets.only(
+                                                          bottom: i < 5
+                                                              ? 1.0
+                                                              : 0.0,
+                                                        ),
+                                                        color: lit
+                                                            ? (isHot
+                                                                  ? Colors
+                                                                        .orange
+                                                                  : kGreen)
+                                                            : const Color(
+                                                                0xFF1A1A1A,
+                                                              ),
+                                                      );
+                                                    }),
+                                                  ),
+                                                  if (isSoloed)
+                                                    const Positioned(
+                                                      top: 0,
+                                                      left: 0,
+                                                      right: 0,
+                                                      child: Center(
+                                                        child: Text(
+                                                          'S',
+                                                          style: TextStyle(
+                                                            color:
+                                                                Colors.yellow,
+                                                            fontSize: 10,
+                                                            fontWeight:
+                                                                FontWeight.bold,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                ],
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    // Level number
+                                    GestureDetector(
+                                      onTap: () {
+                                        model.currentWindow =
+                                            4; // Switch to Mixer
+                                        model.cursorRow = 0; // LVL row
+                                        model.cursorCol = ch;
+                                        model.enterEditMode();
+                                        setState(() {});
+                                      },
+                                      child: Text(
+                                        level.toString().padLeft(2, '0'),
+                                        style: trackerStyle(size: fontSize),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                  // Spacer between mixer and control bar (one line height)
+                  const SizedBox(height: 28),
+                  // Control bar (Play, Stop, Loop buttons)
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final fontSize = (constraints.maxWidth * 0.12).clamp(
+                        16.0,
+                        32.0,
+                      );
+                      final buttonW = (constraints.maxWidth * 0.15).clamp(
+                        40.0,
+                        80.0,
+                      );
+                      return Container(
+                        color: kBarBg,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 6,
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: [
+                                GestureDetector(
+                                  onTap: () {
+                                    _togglePlay();
+                                  },
+                                  child: Container(
+                                    width: buttonW,
+                                    height: 36,
+                                    decoration: BoxDecoration(
+                                      border: Border.all(
+                                        color: model.isPlaying
+                                            ? kGreen
+                                            : Colors.white,
+                                        width: 2,
+                                      ),
+                                    ),
+                                    alignment: Alignment.center,
+                                    child: Text(
+                                      model.isPlaying ? 'STOP' : 'PLAY',
+                                      style: trackerStyle(
+                                        size: fontSize,
+                                        color: model.isPlaying
+                                            ? kGreen
+                                            : Colors.white,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                GestureDetector(
+                                  onTap: () {
+                                    setState(() {
+                                      model.isLooping = !model.isLooping;
+                                    });
+                                  },
+                                  child: Container(
+                                    width: buttonW,
+                                    height: 36,
+                                    decoration: BoxDecoration(
+                                      border: Border.all(
+                                        color: model.isLooping
+                                            ? kGreen
+                                            : Colors.white,
+                                        width: 2,
+                                      ),
+                                    ),
+                                    alignment: Alignment.center,
+                                    child: Text(
+                                      'LOOP',
+                                      style: trackerStyle(
+                                        size: fontSize,
+                                        color: model.isLooping
+                                            ? kGreen
+                                            : Colors.white,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            GestureDetector(
                               onTap: () {
                                 setState(() {
-                                  _navigateToWindow(buttonIndex);
+                                  model.editingBPM = true;
+                                  model.inEditMode = true;
+                                  model.editBuffer = '';
+                                  model.editMaxChars = 3;
                                 });
                               },
+                              child: Text(
+                                'T: ${(model.displayBpm > 0 ? model.displayBpm : model.song.bpm).toString().padLeft(3, '0')}',
+                                style: trackerStyle(
+                                  size: fontSize,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            // Undo
+                            GestureDetector(
+                              onTap: () {
+                                if (!model.canUndo) return;
+                                setState(() {
+                                  model.undo();
+                                });
+                                _syncMixerSendsToNative();
+                                _syncTrackMutesToNative();
+                                _reenqueueFromPlayhead();
+                              },
                               child: Container(
-                                width: buttonW,
+                                width: 32,
                                 height: 36,
                                 decoration: BoxDecoration(
                                   border: Border.all(
-                                    color: model.currentWindow == buttonIndex ? kGreen : Colors.white,
+                                    color: model.canUndo
+                                        ? Colors.white
+                                        : Colors.white24,
                                     width: 2,
                                   ),
                                 ),
                                 alignment: Alignment.center,
                                 child: Text(
-                                  windowNames[buttonIndex],
+                                  '↶',
                                   style: trackerStyle(
                                     size: fontSize,
-                                    color: model.currentWindow == buttonIndex ? kGreen : Colors.white,
+                                    color: model.canUndo
+                                        ? Colors.white
+                                        : Colors.white24,
                                   ),
                                 ),
                               ),
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-            // Spacer between nav and content (one line height)
-            const SizedBox(height: 28),
-            // Content area — Expanded fills exactly the remaining space, no overflow possible
-            Expanded(
-              child: _buildWindow(),
-            ),
-            // Spacer between content and mixer (one line height)
-            const SizedBox(height: 28),
-            // Simple mixer strip (persistent, shows meters and levels)
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final fontSize = (constraints.maxWidth * 0.08).clamp(16.0, 32.0);
-                final meterWidth = (constraints.maxWidth / 8 * 0.4).clamp(20.0, 40.0);
-                return Container(
-                  color: kBarBg,
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.start,
-                    children: [
-                      // Invisible spacer (for alignment)
-                      SizedBox(
-                        width: (constraints.maxWidth / 14),
-                      ),
-                      ...List.generate(8, (ch) {
-                        final level = model.mixerChannels[ch].level;
-                        final bool isSoloed = model.soloedTracks.contains(ch);
-                        return Expanded(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              // LED meter: 6 blocks × 5 dB, range −30..0 dB.
-                              // Tap = toggle solo
-                              GestureDetector(
-                                behavior: HitTestBehavior.opaque,
-                                onTap: () async {
-                                  model.toggleSolo(ch);
-                                  setState(() {});
-                                  _syncTrackMutesToNative();
-                                },
-                                child: RepaintBoundary(
-                                  child: ValueListenableBuilder<List<double>>(
-                                    valueListenable: _trackPeaksVN,
-                                    builder: (context, peaks, _) {
-                                  final double audioLevel =
-                                      ch < peaks.length ? peaks[ch] : 0.0;
-                                  final double dB = audioLevel > 1e-6
-                                      ? 20.0 * math.log(audioLevel) / math.ln10
-                                      : -60.0;
-                                  final Color borderColor = isSoloed
-                                      ? Colors.yellow
-                                      : Colors.white;
-                                  return Container(
-                                    width: meterWidth,
-                                    height: 40,
-                                    decoration: BoxDecoration(
-                                      border: Border.all(color: borderColor, width: isSoloed ? 2 : 1),
-                                      color: Colors.black,
-                                    ),
-                                    padding: const EdgeInsets.all(2),
-                                    child: Stack(
-                                      children: [
-                                        Column(
-                                          mainAxisAlignment: MainAxisAlignment.end,
-                                          children: List.generate(6, (i) {
-                                            // i=0 = top block (−5..0 dB), i=5 = bottom (−30..−25 dB)
-                                            final int blockIdx = 5 - i;
-                                            final double thresh = -30.0 + blockIdx * 5.0;
-                                            final bool lit = dB >= thresh;
-                                            final bool isHot = blockIdx == 5;
-                                            return Container(
-                                              width: double.infinity,
-                                              height: 5,
-                                              margin: EdgeInsets.only(bottom: i < 5 ? 1.0 : 0.0),
-                                              color: lit
-                                                  ? (isHot ? Colors.orange : kGreen)
-                                                  : const Color(0xFF1A1A1A),
-                                            );
-                                          }),
-                                        ),
-                                        if (isSoloed)
-                                          const Positioned(
-                                            top: 0, left: 0, right: 0,
-                                            child: Center(
-                                              child: Text('S',
-                                                style: TextStyle(
-                                                  color: Colors.yellow,
-                                                  fontSize: 10,
-                                                  fontWeight: FontWeight.bold),
-                                              ),
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  );
-                                    },
+                            ),
+                            const SizedBox(width: 6),
+                            // Redo
+                            GestureDetector(
+                              onTap: () {
+                                if (!model.canRedo) return;
+                                setState(() {
+                                  model.redo();
+                                });
+                                _syncMixerSendsToNative();
+                                _syncTrackMutesToNative();
+                                _reenqueueFromPlayhead();
+                              },
+                              child: Container(
+                                width: 32,
+                                height: 36,
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: model.canRedo
+                                        ? Colors.white
+                                        : Colors.white24,
+                                    width: 2,
                                   ),
                                 ),
-                              ),
-                              const SizedBox(height: 2),
-                              // Level number
-                              GestureDetector(
-                                onTap: () {
-                                  model.currentWindow = 4; // Switch to Mixer
-                                  model.cursorRow = 0; // LVL row
-                                  model.cursorCol = ch;
-                                  model.enterEditMode();
-                                  setState(() {});
-                                },
+                                alignment: Alignment.center,
                                 child: Text(
-                                  level.toString().padLeft(2, '0'),
-                                  style: trackerStyle(size: fontSize),
-                                  textAlign: TextAlign.center,
+                                  '↷',
+                                  style: trackerStyle(
+                                    size: fontSize,
+                                    color: model.canRedo
+                                        ? Colors.white
+                                        : Colors.white24,
+                                  ),
                                 ),
                               ),
-                            ],
-                          ),
-                        );
-                      }),
-                    ],
+                            ),
+                            const SizedBox(width: 8),
+                            GestureDetector(
+                              onTap: () {
+                                setState(() {
+                                  model.projectMenuVisible =
+                                      !model.projectMenuVisible;
+                                });
+                              },
+                              child: Container(
+                                width: 32,
+                                height: 36,
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: model.projectMenuVisible
+                                        ? kGreen
+                                        : Colors.white,
+                                    width: 2,
+                                  ),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  '☰',
+                                  style: trackerStyle(
+                                    size: fontSize,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
                   ),
-                );
-              },
-            ),
-            // Spacer between mixer and control bar (one line height)
-            const SizedBox(height: 28),
-            // Control bar (Play, Stop, Loop buttons)
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final fontSize = (constraints.maxWidth * 0.12).clamp(16.0, 32.0);
-                final buttonW = (constraints.maxWidth * 0.15).clamp(40.0, 80.0);
-                return Container(
-                  color: kBarBg,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        children: [
-                          GestureDetector(
-                            onTap: () {
-                              _togglePlay();
-                            },
-                            child: Container(
-                              width: buttonW,
-                              height: 36,
-                              decoration: BoxDecoration(
-                                border: Border.all(
-                                  color: model.isPlaying ? kGreen : Colors.white,
-                                  width: 2,
-                                ),
-                              ),
-                              alignment: Alignment.center,
-                              child: Text(
-                                model.isPlaying ? 'STOP' : 'PLAY',
-                                style: trackerStyle(
-                                  size: fontSize,
-                                  color: model.isPlaying ? kGreen : Colors.white,
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          GestureDetector(
-                            onTap: () {
-                              setState(() {
-                                model.isLooping = !model.isLooping;
-                              });
-                            },
-                            child: Container(
-                              width: buttonW,
-                              height: 36,
-                              decoration: BoxDecoration(
-                                border: Border.all(
-                                  color: model.isLooping ? kGreen : Colors.white,
-                                  width: 2,
-                                ),
-                              ),
-                              alignment: Alignment.center,
-                              child: Text(
-                                'LOOP',
-                                style: trackerStyle(
-                                  size: fontSize,
-                                  color: model.isLooping ? kGreen : Colors.white,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      GestureDetector(
-                        onTap: () {
-                          setState(() {
-                            model.editingBPM = true;
-                            model.inEditMode = true;
-                            model.editBuffer = '';
-                            model.editMaxChars = 3;
-                          });
-                        },
-                        child: Text(
-                          'T: ${model.song.bpm.toString().padLeft(3, '0')}',
-                          style: trackerStyle(size: fontSize, color: Colors.white),
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      // Undo
-                      GestureDetector(
-                        onTap: () {
-                          if (!model.canUndo) return;
-                          setState(() {
-                            model.undo();
-                          });
-                          _syncMixerSendsToNative();
-                          _syncTrackMutesToNative();
-                          _reenqueueFromPlayhead();
-                        },
-                        child: Container(
-                          width: 32,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            border: Border.all(
-                              color: model.canUndo ? Colors.white : Colors.white24,
-                              width: 2,
-                            ),
-                          ),
-                          alignment: Alignment.center,
-                          child: Text(
-                            '↶',
-                            style: trackerStyle(
-                              size: fontSize,
-                              color: model.canUndo ? Colors.white : Colors.white24,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      // Redo
-                      GestureDetector(
-                        onTap: () {
-                          if (!model.canRedo) return;
-                          setState(() {
-                            model.redo();
-                          });
-                          _syncMixerSendsToNative();
-                          _syncTrackMutesToNative();
-                          _reenqueueFromPlayhead();
-                        },
-                        child: Container(
-                          width: 32,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            border: Border.all(
-                              color: model.canRedo ? Colors.white : Colors.white24,
-                              width: 2,
-                            ),
-                          ),
-                          alignment: Alignment.center,
-                          child: Text(
-                            '↷',
-                            style: trackerStyle(
-                              size: fontSize,
-                              color: model.canRedo ? Colors.white : Colors.white24,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      GestureDetector(
-                        onTap: () {
-                          setState(() {
-                            model.projectMenuVisible = !model.projectMenuVisible;
-                          });
-                        },
-                        child: Container(
-                          width: 32,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            border: Border.all(
-                              color: model.projectMenuVisible ? kGreen : Colors.white,
-                              width: 2,
-                            ),
-                          ),
-                          alignment: Alignment.center,
-                          child: Text(
-                            '☰',
-                            style: trackerStyle(size: fontSize, color: Colors.white),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ],
-        ),
+                ],
+              ),
               // Bottom edit menu popup
-              if (model.editMenuVisible)
-                _buildBottomEditMenu(),
+              if (model.editMenuVisible) _buildBottomEditMenu(),
               // Project menu backdrop
               if (model.projectMenuVisible)
                 Positioned.fill(
@@ -928,8 +1084,7 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                   ),
                 ),
               // Project menu popup
-              if (model.projectMenuVisible)
-                _buildProjectMenu(),
+              if (model.projectMenuVisible) _buildProjectMenu(),
             ],
           ),
         ),
@@ -938,7 +1093,17 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   }
 
   Widget _buildProjectMenu() {
-    const menuItems = ['SAVE SONG', 'SAVE AS...', 'NEW SONG', 'LOAD SONG', 'EXPORT WAV', 'EXPORT ZIP', 'IMPORT ZIP', 'SONG SETTINGS', 'MANUAL'];
+    const menuItems = [
+      'SAVE SONG',
+      'SAVE AS...',
+      'NEW SONG',
+      'LOAD SONG',
+      'EXPORT WAV',
+      'EXPORT ZIP',
+      'IMPORT ZIP',
+      'SONG SETTINGS',
+      'MANUAL',
+    ];
 
     return Positioned(
       right: 8,
@@ -956,7 +1121,9 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
             Container(
               height: 36,
               decoration: const BoxDecoration(
-                border: Border(bottom: BorderSide(color: Colors.white, width: 1)),
+                border: Border(
+                  bottom: BorderSide(color: Colors.white, width: 1),
+                ),
               ),
               alignment: Alignment.center,
               child: Text(
@@ -967,32 +1134,34 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
               ),
             ),
             ...menuItems.map((item) {
-            return GestureDetector(
-              onTap: () {
-                setState(() {
-                  model.projectMenuVisible = false;
-                });
-                _handleProjectMenuAction(item);
-              },
-              child: Container(
-                height: 40,
-                decoration: BoxDecoration(
-                  border: Border(
-                    bottom: BorderSide(
-                      color: item == menuItems.last ? Colors.transparent : Colors.white,
-                      width: 1,
+              return GestureDetector(
+                onTap: () {
+                  setState(() {
+                    model.projectMenuVisible = false;
+                  });
+                  _handleProjectMenuAction(item);
+                },
+                child: Container(
+                  height: 40,
+                  decoration: BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(
+                        color: item == menuItems.last
+                            ? Colors.transparent
+                            : Colors.white,
+                        width: 1,
+                      ),
                     ),
                   ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    item,
+                    style: trackerStyle(size: 20, color: Colors.white),
+                    textAlign: TextAlign.center,
+                  ),
                 ),
-                alignment: Alignment.center,
-                child: Text(
-                  item,
-                  style: trackerStyle(size: 20, color: Colors.white),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            );
-          }),
+              );
+            }),
           ],
         ),
       ),
@@ -1027,7 +1196,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         final saveOk = await ProjectManager.saveProject(projectName, model);
         if (!mounted) return;
         setState(() {});
-        _showStatusSnackBar(saveOk, saveOk ? 'Saved: $projectName' : 'Save FAILED — check logs');
+        _showStatusSnackBar(
+          saveOk,
+          saveOk ? 'Saved: $projectName' : 'Save FAILED — check logs',
+        );
         break;
 
       case 'SAVE AS...':
@@ -1035,15 +1207,20 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         if (newName != null && newName.isNotEmpty) {
           // Warn if a project with that name already exists
           final existing = await ProjectManager.listProjects();
-          final clash = existing.any((d) =>
-              ProjectManager.getProjectName(d).toLowerCase() == newName.toLowerCase());
+          final clash = existing.any(
+            (d) =>
+                ProjectManager.getProjectName(d).toLowerCase() ==
+                newName.toLowerCase(),
+          );
           if (clash && mounted) {
             final overwrite = await showDialog<bool>(
               context: context,
               builder: (ctx) => AlertDialog(
                 backgroundColor: Colors.black,
-                title: Text('OVERWRITE?',
-                    style: trackerStyle(size: 20, color: Colors.red)),
+                title: Text(
+                  'OVERWRITE?',
+                  style: trackerStyle(size: 20, color: Colors.red),
+                ),
                 content: Text(
                   'A project named "$newName" already exists. Overwrite it?',
                   style: trackerStyle(size: 16, color: Colors.white),
@@ -1051,13 +1228,17 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                 actions: [
                   TextButton(
                     onPressed: () => Navigator.pop(ctx, false),
-                    child: Text('Cancel',
-                        style: trackerStyle(size: 18, color: Colors.white54)),
+                    child: Text(
+                      'Cancel',
+                      style: trackerStyle(size: 18, color: Colors.white54),
+                    ),
                   ),
                   TextButton(
                     onPressed: () => Navigator.pop(ctx, true),
-                    child: Text('Overwrite',
-                        style: trackerStyle(size: 18, color: Colors.red)),
+                    child: Text(
+                      'Overwrite',
+                      style: trackerStyle(size: 18, color: Colors.red),
+                    ),
                   ),
                 ],
               ),
@@ -1069,7 +1250,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
           // Note: ProjectManager.saveProject already calls model.setCurrentProject
           // with the real path — don't override it here.
           setState(() {});
-          _showStatusSnackBar(saveOk, saveOk ? 'Saved as: $newName' : 'Save FAILED — check logs');
+          _showStatusSnackBar(
+            saveOk,
+            saveOk ? 'Saved as: $newName' : 'Save FAILED — check logs',
+          );
         }
         break;
 
@@ -1081,7 +1265,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
           final saveOk = await ProjectManager.saveProject(songName, model);
           if (!mounted) return;
           setState(() {});
-          _showStatusSnackBar(saveOk, saveOk ? 'Created: $songName' : 'Save FAILED — check logs');
+          _showStatusSnackBar(
+            saveOk,
+            saveOk ? 'Created: $songName' : 'Save FAILED — check logs',
+          );
         }
         break;
 
@@ -1140,7 +1327,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
           children: [
             const CircularProgressIndicator(color: kGreen),
             const SizedBox(width: 16),
-            Text('Importing ZIP...', style: trackerStyle(size: 18, color: Colors.white)),
+            Text(
+              'Importing ZIP...',
+              style: trackerStyle(size: 18, color: Colors.white),
+            ),
           ],
         ),
       ),
@@ -1157,18 +1347,23 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
 
       // Create project folder in LMT_PROJECTS
       final projectDir = await ProjectManager.createProject(projectName);
-      if (projectDir == null) throw Exception('Could not create project folder');
+      if (projectDir == null)
+        throw Exception('Could not create project folder');
 
       // Extract zip into project folder using archive's built-in extractor
       final archive = ZipDecoder().decodeBytes(bytes);
       extractArchiveToDisk(archive, projectDir.path);
 
       // Verify song.lmt exists
-      final songFile = File('${projectDir.path}/${ProjectManager.songFileName}');
+      final songFile = File(
+        '${projectDir.path}/${ProjectManager.songFileName}',
+      );
       if (!songFile.existsSync()) {
         // Clean up and bail
         await projectDir.delete(recursive: true);
-        throw Exception('ZIP does not contain a valid LMT project (missing song.lmt)');
+        throw Exception(
+          'ZIP does not contain a valid LMT project (missing song.lmt)',
+        );
       }
 
       // Load the project
@@ -1207,6 +1402,8 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         _songRowMap = [];
         _chainRowMap = [];
         _phraseStepMap = [];
+        _rowBpm = [];
+        model.displayBpm = 0;
       });
       model.clearUndoHistory();
       _syncMixerSendsToNative();
@@ -1246,7 +1443,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
           children: [
             const CircularProgressIndicator(color: kGreen),
             const SizedBox(width: 16),
-            Text('Zipping project...', style: trackerStyle(size: 18, color: Colors.white)),
+            Text(
+              'Zipping project...',
+              style: trackerStyle(size: 18, color: Colors.white),
+            ),
           ],
         ),
       ),
@@ -1273,12 +1473,16 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
 
       // Copy to public Downloads
       final saved = await NativeAudioEngine.saveToDownloads(
-          sourcePath: tempZipPath, fileName: zipFileName);
+        sourcePath: tempZipPath,
+        fileName: zipFileName,
+      );
       // Clean up temp file
       File(tempZipPath).deleteSync();
 
       ok = saved != null;
-      resultMessage = ok ? 'ZIP saved to Downloads: $zipFileName' : 'ZIP export failed';
+      resultMessage = ok
+          ? 'ZIP saved to Downloads: $zipFileName'
+          : 'ZIP export failed';
     } catch (e) {
       resultMessage = 'ZIP export failed: $e';
     }
@@ -1316,7 +1520,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
           children: [
             const CircularProgressIndicator(color: kGreen),
             const SizedBox(width: 16),
-            Text('Exporting WAV...', style: trackerStyle(size: 18, color: Colors.white)),
+            Text(
+              'Exporting WAV...',
+              style: trackerStyle(size: 18, color: Colors.white),
+            ),
           ],
         ),
       ),
@@ -1328,7 +1535,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     Navigator.of(context, rootNavigator: true).pop(); // close dialog
 
     if (filePath != null) {
-      _showStatusSnackBar(true, 'WAV saved to Downloads: ${filePath.split('/').last}');
+      _showStatusSnackBar(
+        true,
+        'WAV saved to Downloads: ${filePath.split('/').last}',
+      );
     } else {
       _showStatusSnackBar(false, 'Export failed — is the song empty?');
     }
@@ -1349,8 +1559,14 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
             side: BorderSide(color: Colors.white54),
             borderRadius: BorderRadius.zero,
           ),
-          title: Text('Load Song', style: trackerStyle(size: 22, color: Colors.white)),
-          content: Text('No saved projects found.', style: trackerStyle(size: 18)),
+          title: Text(
+            'Load Song',
+            style: trackerStyle(size: 22, color: Colors.white),
+          ),
+          content: Text(
+            'No saved projects found.',
+            style: trackerStyle(size: 18),
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
@@ -1363,7 +1579,9 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     }
 
     // Newest first
-    projects.sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
+    projects.sort(
+      (a, b) => b.statSync().modified.compareTo(a.statSync().modified),
+    );
 
     final selectedDir = await showDialog<Directory>(
       context: context,
@@ -1377,11 +1595,17 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
               side: BorderSide(color: Colors.white54),
               borderRadius: BorderRadius.zero,
             ),
-            title: Text('Load Song', style: trackerStyle(size: 22, color: Colors.white)),
+            title: Text(
+              'Load Song',
+              style: trackerStyle(size: 22, color: Colors.white),
+            ),
             content: SizedBox(
               width: double.maxFinite,
               child: list.isEmpty
-                  ? Text('No projects.', style: trackerStyle(size: 18, color: Colors.white54))
+                  ? Text(
+                      'No projects.',
+                      style: trackerStyle(size: 18, color: Colors.white54),
+                    )
                   : ListView.builder(
                       shrinkWrap: true,
                       itemCount: list.length,
@@ -1389,7 +1613,9 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                         final name = ProjectManager.getProjectName(list[i]);
                         return Container(
                           decoration: const BoxDecoration(
-                            border: Border(bottom: BorderSide(color: Colors.white12)),
+                            border: Border(
+                              bottom: BorderSide(color: Colors.white12),
+                            ),
                           ),
                           child: Row(
                             children: [
@@ -1397,8 +1623,17 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                                 child: InkWell(
                                   onTap: () => Navigator.pop(ctx, list[i]),
                                   child: Padding(
-                                    padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
-                                    child: Text(name, style: trackerStyle(size: 18, color: kGreen)),
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 10,
+                                      horizontal: 4,
+                                    ),
+                                    child: Text(
+                                      name,
+                                      style: trackerStyle(
+                                        size: 18,
+                                        color: kGreen,
+                                      ),
+                                    ),
                                   ),
                                 ),
                               ),
@@ -1414,18 +1649,42 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                                         side: BorderSide(color: Colors.red),
                                         borderRadius: BorderRadius.zero,
                                       ),
-                                      title: Text('Delete "$name"?',
-                                          style: trackerStyle(size: 20, color: Colors.red)),
-                                      content: Text('This cannot be undone.',
-                                          style: trackerStyle(size: 16, color: Colors.white54)),
+                                      title: Text(
+                                        'Delete "$name"?',
+                                        style: trackerStyle(
+                                          size: 20,
+                                          color: Colors.red,
+                                        ),
+                                      ),
+                                      content: Text(
+                                        'This cannot be undone.',
+                                        style: trackerStyle(
+                                          size: 16,
+                                          color: Colors.white54,
+                                        ),
+                                      ),
                                       actions: [
                                         TextButton(
-                                          onPressed: () => Navigator.pop(c2, false),
-                                          child: Text('CANCEL', style: trackerStyle(size: 16, color: Colors.white54)),
+                                          onPressed: () =>
+                                              Navigator.pop(c2, false),
+                                          child: Text(
+                                            'CANCEL',
+                                            style: trackerStyle(
+                                              size: 16,
+                                              color: Colors.white54,
+                                            ),
+                                          ),
                                         ),
                                         TextButton(
-                                          onPressed: () => Navigator.pop(c2, true),
-                                          child: Text('DELETE', style: trackerStyle(size: 16, color: Colors.red)),
+                                          onPressed: () =>
+                                              Navigator.pop(c2, true),
+                                          child: Text(
+                                            'DELETE',
+                                            style: trackerStyle(
+                                              size: 16,
+                                              color: Colors.red,
+                                            ),
+                                          ),
                                         ),
                                       ],
                                     ),
@@ -1436,8 +1695,15 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                                   }
                                 },
                                 child: const Padding(
-                                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                  child: Icon(Icons.delete_outline, color: Colors.red, size: 20),
+                                  padding: EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 10,
+                                  ),
+                                  child: Icon(
+                                    Icons.delete_outline,
+                                    color: Colors.red,
+                                    size: 20,
+                                  ),
                                 ),
                               ),
                             ],
@@ -1449,7 +1715,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
-                child: Text('Cancel', style: trackerStyle(size: 18, color: Colors.white54)),
+                child: Text(
+                  'Cancel',
+                  style: trackerStyle(size: 18, color: Colors.white54),
+                ),
               ),
             ],
           ),
@@ -1493,6 +1762,8 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
       _songRowMap = [];
       _chainRowMap = [];
       _phraseStepMap = [];
+      _rowBpm = [];
+      model.displayBpm = 0;
     });
     model.clearUndoHistory();
     _syncMixerSendsToNative();
@@ -1501,8 +1772,8 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
   }
 
   Future<void> _showSongSettingsDialog() async {
-    int bpmVal   = model.song.bpm;
-    int lpbVal   = model.song.lpb;
+    int bpmVal = model.song.bpm;
+    int lpbVal = model.song.lpb;
     int swingVal = model.song.swingPercent;
 
     final result = await showDialog<(int, int, int)>(
@@ -1512,11 +1783,12 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         return StatefulBuilder(
           builder: (ctx, setDialogState) {
             void adjustBpm(int delta) =>
-                setDialogState(() => bpmVal = (bpmVal + delta).clamp(60, 300));
+                setDialogState(() => bpmVal = (bpmVal + delta).clamp(20, 300));
             void adjustLpb(int delta) =>
                 setDialogState(() => lpbVal = (lpbVal + delta).clamp(1, 12));
-            void adjustSwing(int delta) =>
-                setDialogState(() => swingVal = (swingVal + delta).clamp(50, 75));
+            void adjustSwing(int delta) => setDialogState(
+              () => swingVal = (swingVal + delta).clamp(50, 75),
+            );
 
             // A single spinner row: label / range hint / [−] [value] [+]
             Widget spinRow({
@@ -1532,15 +1804,23 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(label, style: trackerStyle(size: 26, color: Colors.white)),
-                      Text(range, style: trackerStyle(size: 20, color: Colors.white54)),
+                      Text(
+                        label,
+                        style: trackerStyle(size: 26, color: Colors.white),
+                      ),
+                      Text(
+                        range,
+                        style: trackerStyle(size: 20, color: Colors.white54),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 6),
                   // Spinner
                   Container(
                     decoration: const BoxDecoration(
-                      border: Border.fromBorderSide(BorderSide(color: Colors.white, width: 1)),
+                      border: Border.fromBorderSide(
+                        BorderSide(color: Colors.white, width: 1),
+                      ),
                     ),
                     child: Row(
                       children: [
@@ -1551,10 +1831,21 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                             width: 56,
                             height: 64,
                             decoration: const BoxDecoration(
-                              border: Border(right: BorderSide(color: Colors.white, width: 1)),
+                              border: Border(
+                                right: BorderSide(
+                                  color: Colors.white,
+                                  width: 1,
+                                ),
+                              ),
                             ),
                             alignment: Alignment.center,
-                            child: Text('−', style: trackerStyle(size: 40, color: Colors.white)),
+                            child: Text(
+                              '−',
+                              style: trackerStyle(
+                                size: 40,
+                                color: Colors.white,
+                              ),
+                            ),
                           ),
                         ),
                         // Value display
@@ -1572,10 +1863,18 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                             width: 56,
                             height: 64,
                             decoration: const BoxDecoration(
-                              border: Border(left: BorderSide(color: Colors.white, width: 1)),
+                              border: Border(
+                                left: BorderSide(color: Colors.white, width: 1),
+                              ),
                             ),
                             alignment: Alignment.center,
-                            child: Text('+', style: trackerStyle(size: 40, color: Colors.white)),
+                            child: Text(
+                              '+',
+                              style: trackerStyle(
+                                size: 40,
+                                color: Colors.white,
+                              ),
+                            ),
                           ),
                         ),
                       ],
@@ -1588,11 +1887,16 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
             return Dialog(
               backgroundColor: Colors.black,
               elevation: 0,
-              insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 80),
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 80,
+              ),
               child: Container(
                 decoration: const BoxDecoration(
                   color: Colors.black,
-                  border: Border.fromBorderSide(BorderSide(color: Colors.white, width: 2)),
+                  border: Border.fromBorderSide(
+                    BorderSide(color: Colors.white, width: 2),
+                  ),
                 ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -1600,9 +1904,14 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                   children: [
                     // Title bar
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 10,
+                      ),
                       decoration: const BoxDecoration(
-                        border: Border(bottom: BorderSide(color: Colors.white, width: 1)),
+                        border: Border(
+                          bottom: BorderSide(color: Colors.white, width: 1),
+                        ),
                       ),
                       child: Text(
                         'SONG SETTINGS',
@@ -1611,13 +1920,16 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                     ),
                     // Body
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 20,
+                      ),
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           spinRow(
                             label: 'BPM',
-                            range: '60 – 300',
+                            range: '20 – 300',
                             value: bpmVal,
                             onAdjust: adjustBpm,
                           ),
@@ -1641,7 +1953,9 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                     // Footer buttons
                     Container(
                       decoration: const BoxDecoration(
-                        border: Border(top: BorderSide(color: Colors.white, width: 1)),
+                        border: Border(
+                          top: BorderSide(color: Colors.white, width: 1),
+                        ),
                       ),
                       child: Row(
                         children: [
@@ -1649,22 +1963,37 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                             child: GestureDetector(
                               onTap: () => Navigator.pop(ctx),
                               child: Container(
-                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 14,
+                                ),
                                 alignment: Alignment.center,
-                                child: Text('CANCEL',
-                                    style: trackerStyle(size: 24, color: Colors.white54)),
+                                child: Text(
+                                  'CANCEL',
+                                  style: trackerStyle(
+                                    size: 24,
+                                    color: Colors.white54,
+                                  ),
+                                ),
                               ),
                             ),
                           ),
                           Container(width: 1, color: Colors.white),
                           Expanded(
                             child: GestureDetector(
-                              onTap: () => Navigator.pop(ctx, (bpmVal, lpbVal, swingVal)),
+                              onTap: () => Navigator.pop(ctx, (
+                                bpmVal,
+                                lpbVal,
+                                swingVal,
+                              )),
                               child: Container(
-                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 14,
+                                ),
                                 alignment: Alignment.center,
-                                child: Text('OK',
-                                    style: trackerStyle(size: 24, color: kGreen)),
+                                child: Text(
+                                  'OK',
+                                  style: trackerStyle(size: 24, color: kGreen),
+                                ),
                               ),
                             ),
                           ),
@@ -1685,7 +2014,9 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
         model.song.lpb = result.$2;
         model.song.swingPercent = result.$3;
         // Resync delay ms — BPM/LPB change shifts the beat-relative delay time.
-        final delayMs = (model.masterFx.delayLines / 100.0) * 60000.0 /
+        final delayMs =
+            (model.masterFx.delayLines / 100.0) *
+            60000.0 /
             (model.song.bpm * model.song.lpb);
         NativeAudioEngine.setDelayTimeMs(delayMs);
       });
@@ -1705,13 +2036,18 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
             side: BorderSide(color: Colors.white54),
             borderRadius: BorderRadius.zero,
           ),
-          title: Text(title, style: trackerStyle(size: 22, color: Colors.white)),
+          title: Text(
+            title,
+            style: trackerStyle(size: 22, color: Colors.white),
+          ),
           content: TextField(
             autofocus: true,
             onChanged: (value) {
               projectName = value;
             },
-            onSubmitted: (value) => Navigator.of(context).pop(value.isNotEmpty ? value : projectName),
+            onSubmitted: (value) => Navigator.of(
+              context,
+            ).pop(value.isNotEmpty ? value : projectName),
             style: trackerStyle(size: 18, color: kGreen),
             cursorColor: kGreen,
             decoration: InputDecoration(
@@ -1728,7 +2064,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(null),
-              child: Text('Cancel', style: trackerStyle(size: 18, color: Colors.white54)),
+              child: Text(
+                'Cancel',
+                style: trackerStyle(size: 18, color: Colors.white54),
+              ),
             ),
             TextButton(
               onPressed: () => Navigator.of(context).pop(projectName),
@@ -1792,7 +2131,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                         alignment: Alignment.center,
                         child: Text(
                           item,
-                          style: trackerStyle(size: fontSize, color: Colors.cyan),
+                          style: trackerStyle(
+                            size: fontSize,
+                            color: Colors.cyan,
+                          ),
                         ),
                       ),
                     ),
@@ -1816,17 +2158,19 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
     // Phrase note column: OFF + END + DEL + X
     // All other phrase columns: DEL + X
     // Chain / Instrument / Mixer: just DEL + X (+/- in line 1 is enough)
-    final isChainPhCol = model.currentWindow == 1 && model.cursorCol == 0 &&
+    final isChainPhCol =
+        model.currentWindow == 1 &&
+        model.cursorCol == 0 &&
         model.chains[model.activeChainIdx].items[model.cursorRow].phrase > 0;
     final line2Items = model.currentWindow == 0
         ? ['CLO', 'DEL', 'X']
         : isChainPhCol
-            ? ['CLO', 'DEL', 'X']
-            : model.currentWindow == 2
-                ? (isNoteColumn
-                    ? ['OFF', 'END', 'DEL', 'X']
-                    : (model.canInterpolateFx ? ['INT', 'DEL', 'X'] : ['DEL', 'X']))
-                : ['DEL', 'X'];
+        ? ['CLO', 'DEL', 'X']
+        : model.currentWindow == 2
+        ? (isNoteColumn
+              ? ['OFF', 'END', 'DEL', 'X']
+              : (model.canInterpolateFx ? ['INT', 'DEL', 'X'] : ['DEL', 'X']))
+        : ['DEL', 'X'];
 
     return Positioned(
       bottom: kTransportBarH,
@@ -1857,9 +2201,11 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                           } else {
                             model.pushUndo();
                             model.performMenuAction(item);
-                            if (model.currentWindow == 4) _syncMixerSendsToNative();
+                            if (model.currentWindow == 4)
+                              _syncMixerSendsToNative();
                             // Preview after pitch nudge in phrase note column
-                            if (model.currentWindow == 2 && model.cursorCol == 0) {
+                            if (model.currentWindow == 2 &&
+                                model.cursorCol == 0) {
                               _playPhraseNotePreview();
                             }
                             setState(() {});
@@ -1875,7 +2221,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                           alignment: Alignment.center,
                           child: Text(
                             item,
-                            style: trackerStyle(size: fontSize, color: Colors.white),
+                            style: trackerStyle(
+                              size: fontSize,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                       ),
@@ -1895,7 +2244,8 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                           } else {
                             model.pushUndo();
                             model.performMenuAction(item);
-                            if (model.currentWindow == 4) _syncMixerSendsToNative();
+                            if (model.currentWindow == 4)
+                              _syncMixerSendsToNative();
                             setState(() {});
                           }
                         },
@@ -1909,7 +2259,10 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
                           alignment: Alignment.center,
                           child: Text(
                             item,
-                            style: trackerStyle(size: fontSize, color: Colors.white),
+                            style: trackerStyle(
+                              size: fontSize,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                       ),
@@ -1980,7 +2333,11 @@ class _TrackerScreenState extends State<TrackerScreen> with WidgetsBindingObserv
           },
         );
       case 4:
-        return MixerWindow(model: model, onStateChange: () => setState(() {}), masterPeak: _masterPeakVN);
+        return MixerWindow(
+          model: model,
+          onStateChange: () => setState(() {}),
+          masterPeak: _masterPeakVN,
+        );
       default:
         return Container();
     }
