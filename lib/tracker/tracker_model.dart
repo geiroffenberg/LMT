@@ -1275,6 +1275,7 @@ class TrackerModel {
 
     int currentBpm = song.bpm;
     int currentLpb = song.lpb;
+    final rng = Random();
 
     final chainItems = chains[chainIdx].items.where((ci) => ci.phrase != 0).toList();
     final clampedStart = startSlot.clamp(0, chainItems.isEmpty ? 0 : chainItems.length - 1);
@@ -1307,6 +1308,17 @@ class TrackerModel {
         }
         // Slice mode: C-0 to B-0 (MIDI 0-11) routes to instruments 1-12 at unity pitch
         if (midiNote >= 0 && midiNote <= 11) { instrIdx = midiNote; midiNote = 60; }
+
+        // CHA: probabilistic note skip (same logic as song/chain playback)
+        if (instrIdx >= 0) {
+          for (final fx in ps.fx) {
+            if (fx.name == 'CHA') {
+              if (rng.nextInt(100) >= fx.value) { instrIdx = -1; midiNote = -1; }
+              break;
+            }
+          }
+        }
+
         final fxIds  = [0, 0, 0];
         final fxVals = [0, 0, 0];
         for (int i = 0; i < ps.fx.length && i < 3; i++) {
@@ -1673,6 +1685,7 @@ class TrackerModel {
     if (len == 0) return [];
 
     final rows = <Map<String, dynamic>>[];
+    final rng  = Random();
 
     for (int step = 0; step < len; step++) {
       final ps = ph.steps[step];
@@ -1682,6 +1695,17 @@ class TrackerModel {
       int midiNote = ps.note;
       // Slice mode: C-0 to B-0 (MIDI 0-11) routes to instruments 1-12 at unity pitch
       if (midiNote >= 0 && midiNote <= 11) { instrIdx = midiNote; midiNote = 60; }
+
+      // CHA: probabilistic note skip (same logic as song/chain playback)
+      if (instrIdx >= 0) {
+        for (final fx in ps.fx) {
+          if (fx.name == 'CHA') {
+            if (rng.nextInt(100) >= fx.value) { instrIdx = -1; midiNote = -1; }
+            break;
+          }
+        }
+      }
+
       // Route through the correct mixer channel: fill silent slots before and
       // after trackIdx so the phrase uses the same channel as in song/chain view.
       final noteData = <int>[];
