@@ -108,7 +108,7 @@ one track. Chains play their rows sequentially and then loop.
 
 Chain-level FX affect the whole phrase at that row:
 
-`BPM` `TPO` `LPB` `HOP` — see the **FX Reference** section below.
+`BPM` `LPB` — see the **FX Reference** section below.
 
 ---
 
@@ -328,10 +328,8 @@ Commands marked **P** are Phrase-only; **C** are Chain-only; **B** work in both.
 
 | CMD | Where | Value | Description |
 |---|---|---|---|
-| `BPM` | B | 00–99 | Tempo change (maps to 60–240 BPM) |
-| `TPO` | C | 00–99 | Transpose phrase: 00=−12  50=±0  99=+12 |
+| `BPM` | B | 00–99 | Tempo change (01–50 = +1..+50, 51–99 = −1..−49) |
 | `LPB` | C | 01–16 | Lines per beat override for this phrase |
-| `HOP` | C | 00–99 | Jump to chain row (non-linear arrangement) |
 
 ### Slice Player Mode
 
@@ -374,24 +372,6 @@ consecutive rows to sweep a value (e.g. `LPF` for a filter sweep).
 | `RES` | 00–99 | Filter resonance (shared HP/LP) |
 | `LOP` | 00–01 | Loop on (01) / off (00) |
 
-### Mixer Automation (Mxy)
-
-Automate a mixer channel parameter at a specific chain row.
-`x` = channel 1–8, `y` = parameter:
-
-| y | Parameter |
-|---|---|
-| 1 | Volume |
-| 2 | Pan |
-| 3 | Mute (00=off, 01=mute) |
-| 4 | Reverb send |
-| 5 | Delay send |
-| 6 | Chorus send |
-| 7 | Solo (00=off, 01=solo) |
-| 8 | Reset to snapshot |
-
-Example: `M14 50` sets channel 1 reverb send to 50/99.
-
 ---
 
 ## Tips & Workflow
@@ -399,8 +379,7 @@ Example: `M14 50` sets channel 1 reverb send to 50/99.
 1. **Start with the sampler** — load a kick, snare, bass, etc. into slots 1–8.
 2. **Build a phrase per instrument** — each track gets its own chain of phrases.
 3. **Arrange in Song view** — set which chain plays on which track at which row.
-4. **Use Chain FX for variation** — `TPO` to transpose a phrase, `BPM` for a
-   tempo drop, `HOP` to create loops within a chain.
+4. **Use Chain FX for variation** — `BPM` for a tempo change.
 5. **Use REP in Song view** — copies a chain's phrases to fresh slots so you
    can edit the variation without touching the original (M8 workflow).
 6. **Use the Mixer last** — dial in levels and reverb/delay sends once the

@@ -1347,8 +1347,9 @@ class _TrackerScreenState extends State<TrackerScreen>
 
       // Create project folder in LMT_PROJECTS
       final projectDir = await ProjectManager.createProject(projectName);
-      if (projectDir == null)
+      if (projectDir == null) {
         throw Exception('Could not create project folder');
+      }
 
       // Extract zip into project folder using archive's built-in extractor
       final archive = ZipDecoder().decodeBytes(bytes);
@@ -2201,8 +2202,9 @@ class _TrackerScreenState extends State<TrackerScreen>
                           } else {
                             model.pushUndo();
                             model.performMenuAction(item);
-                            if (model.currentWindow == 4)
+                            if (model.currentWindow == 4) {
                               _syncMixerSendsToNative();
+                            }
                             // Preview after pitch nudge in phrase note column
                             if (model.currentWindow == 2 &&
                                 model.cursorCol == 0) {
@@ -2244,8 +2246,9 @@ class _TrackerScreenState extends State<TrackerScreen>
                           } else {
                             model.pushUndo();
                             model.performMenuAction(item);
-                            if (model.currentWindow == 4)
+                            if (model.currentWindow == 4) {
                               _syncMixerSendsToNative();
+                            }
                             setState(() {});
                           }
                         },

@@ -530,8 +530,9 @@ class TrackerModel {
           break;
         }
       }
-      if (newPn == -1)
+      if (newPn == -1) {
         break; // out of free phrase slots — keep original ref for the rest
+      }
       reserved.add(newPn - 1);
       _copyPhrase(pn - 1, newPn - 1);
       phraseRemap[pn] = newPn;
@@ -1155,8 +1156,9 @@ class TrackerModel {
       return song.chains[cursorRow][cursorCol];
     } else if (currentWindow == 1) {
       if (cursorCol == 0) return chains[activeChainIdx].items[cursorRow].phrase;
-      if (cursorCol == 1)
+      if (cursorCol == 1) {
         return chains[activeChainIdx].items[cursorRow].transpose;
+      }
       // FX cols: 2=FX1 name, 3=FX1 val, 4=FX2 name, 5=FX2 val
       final fxIndex = (cursorCol - 2) ~/ 2;
       final isValue = (cursorCol - 2) % 2 == 1;
@@ -1693,9 +1695,9 @@ class TrackerModel {
   //   - Phrases: shorter phrases loop via modulo within a chain slot
   // -----------------------------------------------------------------------
   /// Returns the C++ integer FX command ID for [name].
-  /// Dart-only commands (BPM, LPB, TPO, HOP, CHA) and '---' return 0 so C++ ignores them.
+  /// Dart-only commands (BPM, LPB, CHA) and '---' return 0 so C++ ignores them.
   static int _fxIdForC(String name) {
-    const dartOnly = {'---', 'BPM', 'LPB', 'TPO', 'HOP', 'CHA'};
+    const dartOnly = {'---', 'BPM', 'LPB', 'CHA'};
     if (dartOnly.contains(name)) return 0;
     return kFxId[name] ?? 0;
   }

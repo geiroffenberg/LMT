@@ -1,10 +1,10 @@
 Pure Dart-side (no C++ needed — just row builder logic)
 
 CMD	What to do
-TPO	Transpose MIDI note values during buildPlaybackData
+TPO	REMOVED (redundant with chain TR column)
 LPB	Change lineSamples for that phrase's rows
 BPM	Same — change lineSamples at the chain level
-HOP	Skip/jump in the chain loop during row building
+HOP	REMOVED (was non-functional; possible future: chance-hop)
 CHA	Randomly skip note with Random().nextDouble() > value/99
 Row-time C++ (fireRow, simple flag/value per note)
 
@@ -27,12 +27,12 @@ GAT	Square wave amplitude — simpler than tremolo
 RET	Most complex: re-trigger the note N times within the row
 Sampler automation (SST/SEN/ATK/REL/LPF/HPF/RES/LOP) — per-note overrides of sampler params; wired via applyFxToVoice on per-voice fields (DONE).
 
-Mixer automation (M11–M86) — most complex; needs cross-voice channel effects timed to the row.
+Mixer automation (M11–M86) — REMOVED (was non-functional; would need cross-voice channel effects timed to the row).
 
 Suggested order if you want to go through them:
 
 Build the FX pipeline first (add FX slots to QueuedRow, pass from builder)
-Dart-only ones — fast wins: TPO, LPB, BPM, CHA, HOP
+Dart-only ones — fast wins: LPB, BPM, CHA
 Row-time C++: VOL, PAN, PIT, SNR/SND/SNC, KIL, DEL
 Per-voice: REV, ARP, SLU/SLD, VIB, TRE, GAT
-SST/SEN/ATK/REL/LPF/HPF/RES/LOP (DONE), M11–M86 last
+SST/SEN/ATK/REL/LPF/HPF/RES/LOP (DONE)

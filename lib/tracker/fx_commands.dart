@@ -88,19 +88,9 @@ const Map<String, ({String desc, String value, String windows})> kFxCommands = {
     value: '00–99',
     windows: 'B',
   ),
-  'TPO': (
-    desc: 'Transpose phrase (00=−12, 50=0, 99=+12)',
-    value: '00–99',
-    windows: 'C',
-  ),
   'LPB': (
     desc: 'Lines per beat override for this phrase',
     value: '01–16',
-    windows: 'C',
-  ),
-  'HOP': (
-    desc: 'Jump to chain row (non-linear arrangement)',
-    value: '00–99',
     windows: 'C',
   ),
 
@@ -133,18 +123,6 @@ const Map<String, ({String desc, String value, String windows})> kFxCommands = {
     windows: 'P',
   ),
   'LOP': (desc: 'Sampler: loop on/off', value: '00–01', windows: 'P'),
-
-  // ── Mixer Automation (Mxy — X=channel 1–8, Y=param 1–8) ─────────────────
-  // Channel param Y values:
-  //   1=volume, 2=pan, 3=mute, 4=reverb send, 5=delay send,
-  //   6=chorus send, 7=solo, 8=reset to snapshot
-  'M11': (desc: 'Ch1 volume', value: '00–99', windows: 'B'),
-  'M12': (desc: 'Ch1 pan', value: '00–99', windows: 'B'),
-  'M13': (desc: 'Ch1 mute', value: '00–01', windows: 'B'),
-  'M14': (desc: 'Ch1 reverb send', value: '00–99', windows: 'B'),
-  'M15': (desc: 'Ch1 delay send', value: '00–99', windows: 'B'),
-  'M16': (desc: 'Ch1 chorus send', value: '00–99', windows: 'B'),
-  // … M21–M26, M31–M36 … M81–M86 follow the same pattern for channels 2–8
 };
 
 // ── FX command integer IDs (packed into C++ wire format) ─────────────────
@@ -166,28 +144,6 @@ const Map<String, int> kFxId = {
 ///   01–50 → +1 .. +50  (add to current tempo)
 ///   51–99 → −49 .. −1  (subtract from current tempo)
 int fxBpmOffset(int val) => val == 0 ? 0 : (val <= 50 ? val : val - 100);
-
-// ── Mixer command helper ───────────────────────────────────────────────────
-// Returns the description for any Mxy command dynamically.
-String? mixerCommandDesc(String cmd) {
-  if (cmd.length != 3 || cmd[0] != 'M') return null;
-  final ch = int.tryParse(cmd[1]);
-  final param = int.tryParse(cmd[2]);
-  if (ch == null || ch < 1 || ch > 8) return null;
-  const params = {
-    1: 'volume',
-    2: 'pan',
-    3: 'mute',
-    4: 'reverb send',
-    5: 'delay send',
-    6: 'chorus send',
-    7: 'solo',
-    8: 'reset to snapshot',
-  };
-  final p = params[param];
-  if (p == null) return null;
-  return 'Ch$ch $p';
-}
 
 // ── FX command picker dialog ───────────────────────────────────────────────
 // Opens a tracker-styled dialog listing all commands available in the given
