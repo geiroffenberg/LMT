@@ -21,7 +21,9 @@ static constexpr int kSeqVoices = 8;      // voices 0-7 reserved for sequencer t
 static constexpr int kLayerVoicesPerTrack = 2;
 static constexpr int kSeqLayerVoiceBase = kSeqVoices + kMaxInstruments;               // 107
 static constexpr int kPreviewLayerVoiceBase = kSeqLayerVoiceBase + kSeqVoices * kLayerVoicesPerTrack; // 123
-static constexpr int kMaxVoices = kPreviewLayerVoiceBase + kMaxInstruments * kLayerVoicesPerTrack;    // 123 + 198 = 321
+static constexpr int kCrossfadeVoiceBase = kPreviewLayerVoiceBase + kMaxInstruments * kLayerVoicesPerTrack; // 321
+static constexpr int kCrossfadeVoices = 24;      // spare slots used to fade out interrupted notes (main + 2 layers × 8 tracks)
+static constexpr int kMaxVoices = kCrossfadeVoiceBase + kCrossfadeVoices;             // 329
 
 /// WAV sample data container
 struct SampleData {
@@ -352,6 +354,11 @@ private:
     // Start the release envelope on both layer voices belonging to a track/
     // instrument, mirroring the release just started on their main voice.
     void releaseLayerVoicePair(int layerVoiceBaseIdx);
+
+    // Move the currently-sounding main voice to a spare crossfade slot and set
+    // it to fade out over ~5 ms. Prevents the click created by instantly
+    // re-arming (phase + gain discontinuity) a voice that is still audible.
+    void deferInterruptedVoice(const Voice& src);
 
     // Apply FX slots from a no-note (hold / FX-only) step to the voice already
     // playing on the given track, without re-triggering. No-op if no live voice.

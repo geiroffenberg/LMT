@@ -124,8 +124,21 @@ class _TrackerScreenState extends State<TrackerScreen>
 
   Future<void> _reinitAudio() async {
     await NativeAudioEngine.initialize();
-    for (int i = 0; i < model.instruments.length; i++) {
-      final instr = model.instruments[i];
+    await _restoreInstrumentsToNative(model);
+    // Push current mixer + mute + master FX state to the engine.
+    _syncMixerSendsToNative();
+    _syncTrackMutesToNative();
+    _syncMasterFxToNative();
+  }
+
+  /// Push every instrument's sample + sampler params (start/end/attack/release/
+  /// loop/pitch/vol), HP/LP filters, FX sends (REV/DEL/MOD), chord/unison layers
+  /// and time-stretch to the native engine. The engine resets on init and does
+  /// not cache per-instrument settings across loads, so these must be re-pushed
+  /// after reinit or loading a project, or saved values (e.g. reverb send) are lost.
+  Future<void> _restoreInstrumentsToNative(TrackerModel m) async {
+    for (int i = 0; i < m.instruments.length; i++) {
+      final instr = m.instruments[i];
       if (instr.sample.isNotEmpty) {
         await NativeAudioEngine.loadSample(i, instr.sample);
       }
@@ -141,8 +154,15 @@ class _TrackerScreenState extends State<TrackerScreen>
         s.release,
         s.loopMode,
       );
-      // Engine resets on init — restore HP/LP filters too.
+      // Restore HP/LP filters too.
       await NativeAudioEngine.setInstrumentFilters(i, s.hpCutoff, s.lpCutoff);
+      // Restore per-instrument FX sends (REV/DEL/MOD).
+      await NativeAudioEngine.setInstrumentSends(
+        i,
+        s.revSend,
+        s.delSend,
+        s.modSend,
+      );
       // Restore chord/unison layer 2+3 params too.
       await NativeAudioEngine.setInstrumentLayers(
         i,
@@ -151,11 +171,18 @@ class _TrackerScreenState extends State<TrackerScreen>
         s.layer3PitchCents,
         s.layer3Gain,
       );
+      // Re-apply time-stretch if active — engine reinit reloads the raw WAV.
+      if (instr.sample.isNotEmpty && s.stretchEnabled) {
+        await NativeAudioEngine.updateStretch(
+          i,
+          true,
+          s.stretchLines,
+          m.song.lpb,
+          m.song.bpm.toDouble(),
+          s.stretchPreservePitch,
+        );
+      }
     }
-    // Push current mixer + mute + master FX state to the engine.
-    _syncMixerSendsToNative();
-    _syncTrackMutesToNative();
-    _syncMasterFxToNative();
   }
 
   // Autosave disabled — use SAVE SONG from the menu
@@ -1747,13 +1774,10 @@ class _TrackerScreenState extends State<TrackerScreen>
       _stepTimer = null;
     }
 
-    // Push all samples to C++ engine
-    for (int i = 0; i < loadedModel.instruments.length; i++) {
-      final samplePath = loadedModel.instruments[i].sample;
-      if (samplePath.isNotEmpty) {
-        await NativeAudioEngine.loadSample(i, samplePath);
-      }
-    }
+    // Push all samples + sampler params (filters, sends, layers) to C++ engine —
+    // the engine doesn't cache per-instrument settings across loads, so restoring
+    // just the sample (as before) left saved sends/filters/layers inactive.
+    await _restoreInstrumentsToNative(loadedModel);
 
     if (!mounted) return;
     setState(() {

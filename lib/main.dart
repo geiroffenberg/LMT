@@ -87,6 +87,10 @@ void main() async {
     // Push HP/LP filters too so phrase playback is filtered without
     // needing to open the sampler window first.
     await NativeAudioEngine.setInstrumentFilters(i, s.hpCutoff, s.lpCutoff);
+    // Push per-instrument FX sends (REV/DEL/MOD) so they're restored and active
+    // before the first note plays — without this they stay 0 until the sampler
+    // window is opened, and loaded phrases sound dry.
+    await NativeAudioEngine.setInstrumentSends(i, s.revSend, s.delSend, s.modSend);
     // Push chord/unison layer 2+3 params (gain 0 = layer off).
     await NativeAudioEngine.setInstrumentLayers(
       i, s.layer2PitchCents, s.layer2Gain, s.layer3PitchCents, s.layer3Gain,

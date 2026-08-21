@@ -226,6 +226,25 @@ void AudioEngine::noteOnRegion(int instrumentIdx, float frequencyHz, float level
 
     const int32_t numFrames = mSamples[instrumentIdx].numFrames;
     Voice& voice = mVoices[kSeqVoices + instrumentIdx];
+    // Same click prevention as triggerNote: retriggering an already-audible
+    // preview note hard-resets gain to 0 and jumps the sample position, which
+    // produces a clicking transient. Preserve gain and force a ~3 ms micro-attack
+    // so the new preview note fades in cleanly.
+    const bool interrupted = voice.isActive && voice.gain > 0.001f;
+    constexpr int32_t kRetriggerMicroAttack = static_cast<int32_t>(48000 * 0.003f); // ~3 ms @48k
+
+    // True crossfade for the preview path: if this instrument was already
+    // sounding (main or layer voices), move each into a spare slot and fade it
+    // out over ~5 ms while the new preview note fades in — otherwise re-arming
+    // overwrites still-audible voices and clicks.
+    const int previewLayerBase = kPreviewLayerVoiceBase + instrumentIdx * kLayerVoicesPerTrack;
+    if (interrupted) {
+        deferInterruptedVoice(voice);
+        for (int l = 0; l < kLayerVoicesPerTrack; ++l) {
+            deferInterruptedVoice(mVoices[previewLayerBase + l]);
+        }
+    }
+
     voice.instrumentIdx = instrumentIdx;
     voice.isActive = true;
     voice.startFrame = startNorm * numFrames;
@@ -233,13 +252,18 @@ void AudioEngine::noteOnRegion(int instrumentIdx, float frequencyHz, float level
     voice.endFrame = endNorm * numFrames;
     voice.frequency = frequencyHz;
     voice.level = level;
-    voice.gain = 0.0f;  // Start at 0 for attack envelope
     voice.gainTarget = 1.0f;
     voice.isFadingOut = false;
     voice.elapsedSamples = 0;
     voice.attackSamples = static_cast<int32_t>(attackTime * mSampleRate);
+    if (interrupted) {
+        voice.attackSamples = std::max(voice.attackSamples, kRetriggerMicroAttack);
+        // keep current gain — don't hard-drop it (avoids the 1.0->0 click)
+    } else {
+        voice.gain = 0.0f; // fresh note starts from silence for the attack
+    }
     voice.releaseSamples = static_cast<int32_t>(releaseTime * mSampleRate);
-    voice.envLevel = 1.0f;
+    voice.envLevel = 0.0f;
     voice.loopMode = loopMode;
     voice.pingDir = false;
     // One-pole release coefficient: larger time constant → smaller coefficient → slower decay
@@ -256,7 +280,6 @@ void AudioEngine::noteOnRegion(int instrumentIdx, float frequencyHz, float level
     voice.lpS1 = 0.0f; voice.lpS2 = 0.0f;
 
     // Chord/unison layers 2+3 for preview audition (mirrors triggerNote)
-    const int previewLayerBase = kPreviewLayerVoiceBase + instrumentIdx * kLayerVoicesPerTrack;
     triggerLayerVoice(previewLayerBase + 0, voice,
         mInstrumentLayer2PitchCents[instrumentIdx].load(std::memory_order_relaxed),
         mInstrumentLayer2Gain[instrumentIdx].load(std::memory_order_relaxed));
@@ -450,6 +473,30 @@ void AudioEngine::triggerNote(int instrIdx, int midiNote, int vol, int trackIdx,
     const float ef = endNorm   * static_cast<float>(numFrames);
 
     // --- Arm voice ---
+    // Detect an interrupted note: if this voice is already sounding (active and
+    // audible), overwriting its position/gain instantly produces a click:
+    //   1) gain is force-reset to 0 -> an immediate ~1.0->0 amplitude drop.
+    //   2) samplePosition jumps to the region start -> a mid-waveform phase
+    //      discontinuity on a looping sample.
+    // Fix: on an interrupt, keep the current gain (don't hard-drop it) and force
+    // a short micro-attack (~3 ms) so the new note fades in smoothly, hiding both
+    // discontinuities. Fresh note-ons from silence are unchanged.
+    const bool interrupted = v.isActive && v.gain > 0.001f;
+    constexpr int32_t kRetriggerMicroAttack = static_cast<int32_t>(48000 * 0.003f); // ~3 ms @48k
+
+    // True crossfade: if the track's old note (or any of its chord/unison layer
+    // voices) is still audible, move each into a spare slot and fade it out over
+    // ~5 ms while the new note fades in. The old layer slots are then overwritten
+    // by the new layers below, so they MUST be faded out from a spare slot first
+    // or they'd be abruptly replaced (click).
+    if (interrupted) {
+        deferInterruptedVoice(v);
+        const int layerBase = kSeqLayerVoiceBase + trackIdx * kLayerVoicesPerTrack;
+        for (int l = 0; l < kLayerVoicesPerTrack; ++l) {
+            deferInterruptedVoice(mVoices[layerBase + l]);
+        }
+    }
+
     v.instrumentIdx    = instrIdx;
     v.isActive         = true;
     v.startFrame       = static_cast<double>(sf);
@@ -457,12 +504,19 @@ void AudioEngine::triggerNote(int instrIdx, int midiNote, int vol, int trackIdx,
     v.samplePosition   = static_cast<double>(sf);
     v.frequency        = freq;
     v.level            = level;
-    v.gain             = 0.0f;
     v.gainTarget       = 1.0f;
     v.isFadingOut      = false;
     v.elapsedSamples   = 0;
     v.attackSamples    = static_cast<int32_t>(attackSec * mSampleRate);
-    v.envLevel         = (v.attackSamples > 0) ? 0.0f : 1.0f;
+    // Guarantee a click-free fade-in on interrupted notes (even when the
+    // instrument has no attack), without changing fresh note-on behaviour.
+    if (interrupted) {
+        v.attackSamples = std::max(v.attackSamples, kRetriggerMicroAttack);
+        // keep current gain (don't hard-drop) to avoid the 1.0->0 click
+    } else {
+        v.gain          = 0.0f; // fresh note starts from silence
+    }
+    v.envLevel         = 0.0f; // always ramp in from silence via the attack
     v.loopMode         = loopMode;
     v.pingDir          = false;
     v.reverbSend       = std::min(1.0f, mTrackReverbSend[trackIdx] + mInstrumentRevSend[instrIdx].load(std::memory_order_relaxed));
@@ -559,6 +613,41 @@ void AudioEngine::releaseLayerVoicePair(int layerVoiceBaseIdx) {
                 : 1.0f;
             lv.isFadingOut = true;
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// deferInterruptedVoice — move a still-audible main voice to a spare crossfade
+// slot and fade it out over ~5 ms.
+//
+// If we don't do this, triggering a new note on a track whose previous looped
+// note is still playing creates a click in two ways:
+//   * the old waveform is abruptly silenced at full amplitude, and
+//   * the new note's samplePosition jumps to a different waveform phase.
+// Fading the OLD voice out while the NEW voice fades in (its normal attack, or
+// the micro-attack on retrigger) is a true crossfade and removes the click.
+// ---------------------------------------------------------------------------
+void AudioEngine::deferInterruptedVoice(const Voice& src) {
+    // Nothing to fade if the source isn't actually sounding.
+    if (!src.isActive || src.gain <= 0.0005f) return;
+    // Only reuse a slot once it has gone fully silent. A slot that is still
+    // fading out is still producing audio and MUST NOT be overwritten, or the
+    // voice we already deferred there would be cut back on (click). This is the
+    // key to deferring multiple voices (main + L2 + L3) of one interrupt: each
+    // gets its own spare slot.
+    for (int i = 0; i < kCrossfadeVoices; ++i) {
+        Voice& xf = mVoices[kCrossfadeVoiceBase + i];
+        const float audible = 0.0005f;
+        if (xf.isActive && xf.gain > audible) continue;
+
+        xf = src;                       // copy the full voice state (phase, params, FX)
+        xf.isFadingOut  = true;         // use the existing exponential release path
+        xf.isActive     = true;
+        xf.gainTarget   = 0.0f;
+        xf.releaseK     = 1.0f - std::exp(-1.0f / (static_cast<float>(mSampleRate) * 0.005f));
+        xf.envLevel     = 1.0f;         // release decays envLevel -> 0 and snaps gain at -60dB
+        xf.trackIdx     = src.trackIdx; // keep meter/send routing
+        return;
     }
 }
 
