@@ -9,15 +9,13 @@ import 'tracker/tracker_model.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-  ]);
-  
+  SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+
   // Initialize storage (create LMT_PROJECTS folder if needed)
   print('Starting app initialization...');
   final storageInitialized = await StorageService.initializeStorage();
   print('Storage initialization result: $storageInitialized');
-  
+
   // Determine which project to load:
   //   - If __AUTOSAVE__ is newer than the last explicit save → restore unsaved changes
   //   - Otherwise load the latest explicitly saved project
@@ -27,13 +25,14 @@ void main() async {
 
   if (projectsDir != null) {
     final autoSaveDir = Directory(
-        '${projectsDir.path}/${ProjectManager.autoSaveName}');
+      '${projectsDir.path}/${ProjectManager.autoSaveName}',
+    );
     final latestRegular = await ProjectManager.getLatestProject();
 
     final autoSaveExists = await autoSaveDir.exists();
     if (autoSaveExists && latestRegular != null) {
-      final autoMod     = autoSaveDir.statSync().modified;
-      final regularMod  = latestRegular.statSync().modified;
+      final autoMod = autoSaveDir.statSync().modified;
+      final regularMod = latestRegular.statSync().modified;
       projectToLoad = autoMod.isAfter(regularMod) ? autoSaveDir : latestRegular;
     } else if (autoSaveExists) {
       projectToLoad = autoSaveDir;
@@ -90,10 +89,19 @@ void main() async {
     // Push per-instrument FX sends (REV/DEL/MOD) so they're restored and active
     // before the first note plays — without this they stay 0 until the sampler
     // window is opened, and loaded phrases sound dry.
-    await NativeAudioEngine.setInstrumentSends(i, s.revSend, s.delSend, s.modSend);
+    await NativeAudioEngine.setInstrumentSends(
+      i,
+      s.revSend,
+      s.delSend,
+      s.modSend,
+    );
     // Push chord/unison layer 2+3 params (gain 0 = layer off).
     await NativeAudioEngine.setInstrumentLayers(
-      i, s.layer2PitchCents, s.layer2Gain, s.layer3PitchCents, s.layer3Gain,
+      i,
+      s.layer2PitchCents,
+      s.layer2Gain,
+      s.layer3PitchCents,
+      s.layer3Gain,
     );
     // Restore time-stretch if it was active — the raw WAV was just loaded so
     // the DSP must be re-applied (native engine resets on every app start).
@@ -118,10 +126,40 @@ void main() async {
     NativeAudioEngine.setTrackSends(
       i,
       ch.reverbSend / 99.0,
-      ch.delaySend  / 99.0,
+      ch.delaySend / 99.0,
       ch.chorusSend / 99.0,
     );
   }
+
+  // Push master FX (reverb/delay/chorus/EQ/filters/volume) so the engine's
+  // values match what's saved and displayed in the FX window. Without this the
+  // C++ engine keeps its defaults (e.g. delay 375 ms) that DON'T match the
+  // saved tempo-synced value — the delay only "caught up" once a slider was
+  // touched, which made it sound like any adjustment jumped to a too-fast time.
+  final fx = model.masterFx;
+  NativeAudioEngine.setReverbSize(fx.reverbSize);
+  NativeAudioEngine.setReverbDamping(fx.reverbDamp);
+  NativeAudioEngine.setReverbWidth(fx.reverbWidth);
+  // Map delayLines 0..99 → 0.25..4.0 lines (shortest = ¼ line, longest = 4 lines).
+  NativeAudioEngine.setDelayTimeMs(
+    (0.25 + (fx.delayLines / 99.0) * 3.75) *
+        60000.0 /
+        (model.song.bpm * model.song.lpb),
+  );
+  NativeAudioEngine.setDelayFeedback(fx.delayFeedback);
+  NativeAudioEngine.setChorusRate((fx.chorusRate - 0.1) / 4.9);
+  NativeAudioEngine.setChorusDepth(fx.chorusDepth);
+  NativeAudioEngine.setEqBand(0, fx.eqBand1);
+  NativeAudioEngine.setEqBand(1, fx.eqBand2);
+  NativeAudioEngine.setEqBand(2, fx.eqBand3);
+  NativeAudioEngine.setEqBand(3, fx.eqBand4);
+  NativeAudioEngine.setEqBand(4, fx.eqBand5);
+  NativeAudioEngine.setHpFreq(fx.hpFreq);
+  NativeAudioEngine.setHpRes(fx.hpRes);
+  NativeAudioEngine.setLpFreq(fx.lpFreq);
+  NativeAudioEngine.setLpRes(fx.lpRes);
+  NativeAudioEngine.setLimiterThreshold(fx.limiterThreshold);
+  NativeAudioEngine.setMasterVolume(fx.masterVolume);
 
   runApp(LMTApp(initialModel: model));
 }

@@ -246,8 +246,11 @@ class _TrackerScreenState extends State<TrackerScreen>
     NativeAudioEngine.setReverbSize(fx.reverbSize);
     NativeAudioEngine.setReverbDamping(fx.reverbDamp);
     NativeAudioEngine.setReverbWidth(fx.reverbWidth);
+    // Map delayLines 0..99 → 0.25..4.0 lines (shortest = ¼ line, longest = 4 lines).
     final delayMs =
-        (fx.delayLines / 100.0) * 60000.0 / (model.song.bpm * model.song.lpb);
+        (0.25 + (fx.delayLines / 99.0) * 3.75) *
+        60000.0 /
+        (model.song.bpm * model.song.lpb);
     NativeAudioEngine.setDelayTimeMs(delayMs);
     NativeAudioEngine.setDelayFeedback(fx.delayFeedback);
     NativeAudioEngine.setChorusRate((fx.chorusRate - 0.1) / 4.9);
@@ -1290,6 +1293,9 @@ class _TrackerScreenState extends State<TrackerScreen>
           model.newSong();
           model.setCurrentProject(songName, '');
           final saveOk = await ProjectManager.saveProject(songName, model);
+          // Reset master FX in the engine to the fresh defaults so the new
+          // song doesn't keep the previous song's filters/limiter/effects.
+          _syncMasterFxToNative();
           if (!mounted) return;
           setState(() {});
           _showStatusSnackBar(
@@ -2039,8 +2045,9 @@ class _TrackerScreenState extends State<TrackerScreen>
         model.song.lpb = result.$2;
         model.song.swingPercent = result.$3;
         // Resync delay ms — BPM/LPB change shifts the beat-relative delay time.
+        // Map delayLines 0..99 → 0.25..4.0 lines (shortest = ¼ line, longest = 4 lines).
         final delayMs =
-            (model.masterFx.delayLines / 100.0) *
+            (0.25 + (model.masterFx.delayLines / 99.0) * 3.75) *
             60000.0 /
             (model.song.bpm * model.song.lpb);
         NativeAudioEngine.setDelayTimeMs(delayMs);

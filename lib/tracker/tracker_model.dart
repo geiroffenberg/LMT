@@ -436,6 +436,9 @@ class TrackerModel {
     phrases = List.generate(99, (_) => Phrase());
     instruments = List.generate(99, (_) => Instrument());
     mixerChannels = List.generate(8, (_) => MixerChannel());
+    // Reset master FX (reverb/delay/chorus/EQ/filters/limiter/volume) so a new
+    // song starts from the defaults instead of inheriting the previous song's.
+    masterFx = MasterFx();
 
     // Reset playback state
     isPlaying = false;
