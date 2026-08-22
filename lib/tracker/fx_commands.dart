@@ -77,6 +77,18 @@ const Map<String, ({String desc, String value, String windows})> kFxCommands = {
     windows: 'P',
   ),
 
+  // ── Humanization ──────────────────────────────────────────────────────────
+  'HUT': (
+    desc: 'Humanize timing — % randomization (00=off, 99=max)',
+    value: '00–99',
+    windows: 'P',
+  ),
+  'HUV': (
+    desc: 'Humanize volume — % randomization (00=off, 99=max)',
+    value: '00–99',
+    windows: 'P',
+  ),
+
   // ── FX Sends ─────────────────────────────────────────────────────────────
   'SNR': (desc: 'Send to Reverb', value: '00–99', windows: 'B'),
   'SND': (desc: 'Send to Delay', value: '00–99', windows: 'B'),
@@ -137,6 +149,8 @@ const Map<String, int> kFxId = {
   'HPF': 25, 'RES': 26, 'LOP': 27,
   // Chord/unison layer pitch overrides
   'PI2': 28, 'PI3': 29,
+  // Humanization
+  'HUT': 30, 'HUV': 31,
 };
 
 /// Map a BPM FX value (00–99) to a RELATIVE tempo offset.

@@ -6,6 +6,8 @@ LPB	Change lineSamples for that phrase's rows
 BPM	Same — change lineSamples at the chain level
 HOP	REMOVED (was non-functional; possible future: chance-hop)
 CHA	Randomly skip note with Random().nextDouble() > value/99
+HUT	Humanize timing — add random variation (00=off, 99=max) until value 00
+HUV	Humanize volume — add random variation (00=off, 99=max) until value 00
 Row-time C++ (fireRow, simple flag/value per note)
 
 CMD	What to do

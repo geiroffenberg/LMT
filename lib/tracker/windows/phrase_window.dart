@@ -133,6 +133,10 @@ class PhraseWindow extends StatelessWidget {
                                 if (isDouble && step.instrument == 0) {
                                   // Double-tap on empty instrument: insert last used
                                   step.instrument = model.lastPhraseInstrument;
+                                  // Auto-populate note if empty
+                                  if (step.instrument > 0 && step.note == -1) {
+                                    step.note = model.lastPhraseNote;
+                                  }
                                 } else if (step.instrument > 0) {
                                   // Landing on existing instrument: remember it
                                   model.lastPhraseInstrument = step.instrument;

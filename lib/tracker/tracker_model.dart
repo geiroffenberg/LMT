@@ -794,6 +794,9 @@ class TrackerModel {
     for (int i = 0; i < count; i++) {
       _copyRow(maxR + 1 + i, minR + i);
     }
+    // Select the newly created rows
+    lineSelStart = maxR + 1;
+    lineSelEnd = maxR + count;
   }
 
   /// Clear (DEL) all rows in the current line selection.
@@ -862,9 +865,24 @@ class TrackerModel {
         if (intValue < -1) intValue = -1;
         if (intValue > 120) intValue = 120;
         phrases[activePhraseIdx].steps[cursorRow].note = intValue;
+        // Remember last note entered
+        if (intValue >= 0) {
+          lastPhraseNote = intValue;
+        }
       } else if (cursorCol == 1) {
         intValue = intValue.clamp(0, 99);
         phrases[activePhraseIdx].steps[cursorRow].instrument = intValue;
+        
+        // Auto-populate note if empty: use last entered note or C-4 default
+        final step = phrases[activePhraseIdx].steps[cursorRow];
+        if (intValue > 0 && step.note == -1) {
+          step.note = lastPhraseNote;
+        }
+        
+        // Remember last instrument
+        if (intValue > 0) {
+          lastPhraseInstrument = intValue;
+        }
       } else if (cursorCol == 2) {
         intValue = intValue.clamp(0, 99);
         phrases[activePhraseIdx].steps[cursorRow].volume = intValue;
@@ -1523,6 +1541,11 @@ class TrackerModel {
     int currentLpb = song.lpb;
     final rng = Random();
 
+    // Track active humanize volume % per track (0 = off)
+    final humanizeVolPercent = List<int>.filled(8, 0);
+    // Track active humanize timing % per track (0 = off)
+    final humanizeTimingPercent = List<int>.filled(8, 0);
+
     final trackItems = List<List<ChainItem>>.generate(8, (t) {
       final chainRef = song.chains[songRow][t];
       if (chainRef == 0) return [];
@@ -1626,6 +1649,22 @@ class TrackerModel {
             }
           }
 
+          // Process HUV (Humanize Volume) for this track
+          for (final fx in ps.fx) {
+            if (fx.name == 'HUV') {
+              humanizeVolPercent[t] = fx.value;
+              break;
+            }
+          }
+
+          // Process HUT (Humanize Timing) for this track
+          for (final fx in ps.fx) {
+            if (fx.name == 'HUT') {
+              humanizeTimingPercent[t] = fx.value;
+              break;
+            }
+          }
+
           int? chainVol, chainPan, chainSnr, chainSnd, chainSnc;
           for (final cfx in ci.fx) {
             if (cfx.name == 'VOL') {
@@ -1641,12 +1680,38 @@ class TrackerModel {
           }
 
           final packedVol = chainVol ?? ps.volume;
+          
+          // Apply HUV (Humanize Volume) randomization if active
+          int finalVol = packedVol;
+          if (humanizeVolPercent[t] > 0 && instrIdx >= 0) {
+            // Add random variation from -X% to +X%, clamped to 01–99
+            final range = humanizeVolPercent[t];
+            final variation = rng.nextInt(range * 2 + 1) - range; // [-range, +range]
+            finalVol = (finalVol + variation).clamp(1, 99);
+          }
+
           final fxIds = [0, 0, 0];
           final fxVals = [0, 0, 0];
           for (int i = 0; i < ps.fx.length && i < 3; i++) {
             fxIds[i] = _fxIdForC(ps.fx[i].name);
             fxVals[i] = ps.fx[i].value;
           }
+
+          // Apply HUT (Humanize Timing) via DEL if active and not already present
+          if (humanizeTimingPercent[t] > 0 && instrIdx >= 0) {
+            final delId = kFxId['DEL'];
+            final hasDelFx = fxIds.contains(delId);
+            if (!hasDelFx) {
+              // Generate random DEL value from 0 to humanizeTimingPercent[t]
+              final randomDel = rng.nextInt(humanizeTimingPercent[t] + 1);
+              final emptyIdx = fxIds.indexOf(0);
+              if (emptyIdx != -1) {
+                fxIds[emptyIdx] = delId!;
+                fxVals[emptyIdx] = randomDel;
+              }
+            }
+          }
+
           for (final entry in [
             (kFxId['PAN'], chainPan),
             (kFxId['SNR'], chainSnr),
@@ -1661,7 +1726,7 @@ class TrackerModel {
             fxIds[emptyIdx] = id;
             fxVals[emptyIdx] = val;
           }
-          noteData.addAll([instrIdx, midiNote, packedVol]);
+          noteData.addAll([instrIdx, midiNote, finalVol]);
           for (int i = 0; i < 3; i++) {
             noteData.add(fxIds[i]);
             noteData.add(fxVals[i]);
@@ -1700,7 +1765,7 @@ class TrackerModel {
   /// Returns the C++ integer FX command ID for [name].
   /// Dart-only commands (BPM, LPB, CHA) and '---' return 0 so C++ ignores them.
   static int _fxIdForC(String name) {
-    const dartOnly = {'---', 'BPM', 'LPB', 'CHA'};
+    const dartOnly = {'---', 'BPM', 'LPB', 'CHA', 'HUT', 'HUV'};
     if (dartOnly.contains(name)) return 0;
     return kFxId[name] ?? 0;
   }
@@ -1723,6 +1788,11 @@ class TrackerModel {
     int currentBpm = song.bpm;
     int currentLpb = song.lpb;
     final rng = Random();
+
+    // Track active humanize volume % per track (0 = off)
+    final humanizeVolPercent = List<int>.filled(8, 0);
+    // Track active humanize timing % per track (0 = off)
+    final humanizeTimingPercent = List<int>.filled(8, 0);
 
     for (int songRow = startRow; songRow < 99; songRow++) {
       if (isSongRowEmpty(songRow)) break; // stop at first empty row
@@ -1837,6 +1907,22 @@ class TrackerModel {
               }
             }
 
+            // Process HUV (Humanize Volume) for this track
+            for (final fx in ps.fx) {
+              if (fx.name == 'HUV') {
+                humanizeVolPercent[t] = fx.value;
+                break;
+              }
+            }
+
+            // Process HUT (Humanize Timing) for this track
+            for (final fx in ps.fx) {
+              if (fx.name == 'HUT') {
+                humanizeTimingPercent[t] = fx.value;
+                break;
+              }
+            }
+
             // Chain-level FX overrides for this slot (ci.fx).
             // BPM/LPB already consumed above; handle VOL/PAN/sends here.
             int? chainVol, chainPan, chainSnr, chainSnd, chainSnc;
@@ -1856,6 +1942,14 @@ class TrackerModel {
             // Pack: [instrIdx, midiNote, vol, fx0id, fx0val, fx1id, fx1val, fx2id, fx2val]
             // Chain VOL overrides the step's volume column wholesale.
             final packedVol = chainVol ?? ps.volume;
+            
+            // Apply HUV (Humanize Volume) randomization if active
+            int finalVol = packedVol;
+            if (humanizeVolPercent[t] > 0 && instrIdx >= 0) {
+              final range = humanizeVolPercent[t];
+              final variation = rng.nextInt(range * 2 + 1) - range;
+              finalVol = (finalVol + variation).clamp(1, 99);
+            }
 
             // Fill FX slots from phrase step first (3 slots).
             // Then inject any chain FX into empty slots, skipping ones the
@@ -1866,6 +1960,21 @@ class TrackerModel {
               fxIds[i] = _fxIdForC(ps.fx[i].name);
               fxVals[i] = ps.fx[i].value;
             }
+
+            // Apply HUT (Humanize Timing) via DEL if active and not already present
+            if (humanizeTimingPercent[t] > 0 && instrIdx >= 0) {
+              final delId = kFxId['DEL'];
+              final hasDelFx = fxIds.contains(delId);
+              if (!hasDelFx) {
+                final randomDel = rng.nextInt(humanizeTimingPercent[t] + 1);
+                final emptyIdx = fxIds.indexOf(0);
+                if (emptyIdx != -1) {
+                  fxIds[emptyIdx] = delId!;
+                  fxVals[emptyIdx] = randomDel;
+                }
+              }
+            }
+
             for (final entry in [
               (kFxId['PAN'], chainPan),
               (kFxId['SNR'], chainSnr),
@@ -1880,7 +1989,7 @@ class TrackerModel {
               fxIds[emptyIdx] = id;
               fxVals[emptyIdx] = val;
             }
-            noteData.addAll([instrIdx, midiNote, packedVol]);
+            noteData.addAll([instrIdx, midiNote, finalVol]);
             for (int i = 0; i < 3; i++) {
               noteData.add(fxIds[i]);
               noteData.add(fxVals[i]);
@@ -1922,6 +2031,8 @@ class TrackerModel {
     final rng = Random();
     int currentBpm = song.bpm;
     int currentLpb = song.lpb;
+    int humanizeVolPercent = 0; // Track active HUV for this phrase
+    int humanizeTimingPercent = 0; // Track active HUT for this phrase
 
     for (int step = 0; step < len; step++) {
       final ps = ph.steps[step];
@@ -1957,19 +2068,61 @@ class TrackerModel {
         }
       }
 
+      // Process HUV (Humanize Volume) for this phrase
+      for (final fx in ps.fx) {
+        if (fx.name == 'HUV') {
+          humanizeVolPercent = fx.value;
+          break;
+        }
+      }
+
+      // Process HUT (Humanize Timing) for this phrase
+      for (final fx in ps.fx) {
+        if (fx.name == 'HUT') {
+          humanizeTimingPercent = fx.value;
+          break;
+        }
+      }
+
       // Route through the correct mixer channel: fill silent slots before and
       // after trackIdx so the phrase uses the same channel as in song/chain view.
       final noteData = <int>[];
       for (int t = 0; t < 8; t++) {
         if (t == trackIdx) {
-          noteData.addAll([instrIdx, midiNote, ps.volume]);
-          for (final fx in ps.fx) {
-            noteData.add(_fxIdForC(fx.name));
-            noteData.add(fx.value);
+          int finalVol = ps.volume;
+          // Apply HUV randomization if active
+          if (humanizeVolPercent > 0 && instrIdx >= 0) {
+            final range = humanizeVolPercent;
+            final variation = rng.nextInt(range * 2 + 1) - range;
+            finalVol = (finalVol + variation).clamp(1, 99);
           }
-          // Pad to 9 ints if fewer than 3 FX slots used
-          while (noteData.length < (t + 1) * 9) {
-            noteData.add(0);
+          noteData.addAll([instrIdx, midiNote, finalVol]);
+          
+          // Pack FX slots (max 3) and apply HUT if needed
+          final fxIds = [0, 0, 0];
+          final fxVals = [0, 0, 0];
+          for (int i = 0; i < ps.fx.length && i < 3; i++) {
+            fxIds[i] = _fxIdForC(ps.fx[i].name);
+            fxVals[i] = ps.fx[i].value;
+          }
+          
+          // Apply HUT (Humanize Timing) via DEL if active and not already present
+          if (humanizeTimingPercent > 0 && instrIdx >= 0) {
+            final delId = kFxId['DEL'];
+            final hasDelFx = fxIds.contains(delId);
+            if (!hasDelFx) {
+              final randomDel = rng.nextInt(humanizeTimingPercent + 1);
+              final emptyIdx = fxIds.indexOf(0);
+              if (emptyIdx != -1) {
+                fxIds[emptyIdx] = delId!;
+                fxVals[emptyIdx] = randomDel;
+              }
+            }
+          }
+          
+          for (int i = 0; i < 3; i++) {
+            noteData.add(fxIds[i]);
+            noteData.add(fxVals[i]);
           }
         } else {
           noteData.addAll([-1, -1, -1, 0, 0, 0, 0, 0, 0]);
